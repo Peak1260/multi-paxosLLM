@@ -111,9 +111,9 @@ class NetworkSimulation:
         finally:
             node_socket.close()
         
-        def send_message(self, to_pid, message):
-            if to_pid < len(self.nodes):
-                self.nodes[to_pid].sendall(message.encode('utf-8'))
+    def send_message(self, to_pid, message): # pretend send message to other processes works
+        if to_pid < len(self.nodes):
+            self.nodes[to_pid].sendall(message.encode('utf-8'))
 
     def start_node(self):
         """Start a node that connects to the server."""
@@ -135,6 +135,12 @@ class NetworkSimulation:
             node_socket.sendall(message.encode('utf-8'))
 
         node_socket.close()
+
+
+
+
+
+
 
 # ----------------- Multi-Paxos Implementation -----------------
 
@@ -167,8 +173,12 @@ class PaxosNode:
         self.accept_val = None
         self.current_operation_num = 0
         self.ballot_num = BallotNumber(0, self.pid, 0) # Initial Ballot Number
+        self.consensus_val = None
         # self.isleader = False
         self.who_is_leader = None
+        self.promise_counter = 0 # only the leader will modify this variable
+        self.highest_accept_num = 0
+        
 
         # Leader should have a queue of pending operations
         self.pending_operations = queue.Queue() # only the leaader has this
@@ -197,6 +207,77 @@ class PaxosNode:
         for i in range(self.num_nodes):
             if i != self.pid:
                 self.network.send_message(self.pid, i, prepare_message)
+
+
+    def handle_message(self, message: Dict):
+        message_type = message['type']
+
+        if message_type == MessageType.PREPARE:
+            self.handle_prepare(message)
+        elif message_type == MessageType.PROMISE:
+            self.handle_promise(message)
+        elif message_type == MessageType.ACCEPT:
+            self.handle_accept(message)
+        elif message_type == MessageType.ACCEPTED:
+            self.handle_accepted(message)
+        elif message_type == MessageType.DECIDE:
+            self.handle_decide(message)
+        
+        
+        # if message_type == MessageType.PREPARE:
+        #     self.handle_prepare(message_data)
+        # elif message_type == MessageType.PROMISE:
+        #     self.handle_promise(message_data)
+        # elif message_type == MessageType.ACCEPT:
+        #     self.handle_accept(message_data)
+        # elif message_type == MessageType.ACCEPTED:
+        #     self.handle_accepted(message_data)
+        # elif message_type == MessageType.DECIDE:
+        #     self.handle_decide(message_data)
+    
+    def handle_prepare(self, message: Dict): # Acceptors send to Leader a Promis message 
+        ballot_num = message['ballot_num']
+
+
+        if ballot_num > self.ballot_num:
+            self.ballot_num = ballot_num
+            promise_message = (MessageType.PROMISE, self.accept_num, self.accept_val)
+            self.network.send_message(self.pid, promise_message)
+        else:
+            print ("Ballot number is not greater than current ballot number")
+
+    def handle_promise(self, pid, promise_message): # Leader receives Promis message from Acceptors
+        # Leader will get a response from a majority of acceptors which could be 1 or 2 acceptors
+        # If messagetype is a PROMISE, increment a promise counter
+        self.promise_counter += 1
+
+        if self.promise_counter == 1:
+            if promise_message[2] == None:
+                accept_message = (MessageType.ACCEPT, self.ballot_num, self.consensus_val)
+
+            if promise_message[1] > self.highest_accept_num:
+                self.highest_accept_num = promise_message[1]
+                self.accept_val = promise_message[2]
+                self.accept_num = promise_message[1]
+
+                accept_message = (MessageType.ACCEPT, self.ballot_num, self.accept_val)
+            
+        elif self.promise_counter == 2:
+
+
+
+        self.network.send_message(self.pid, accept_message)
+
+            
+        
+
+
+        
+
+
+
+
+    
             
                 
 def main():
