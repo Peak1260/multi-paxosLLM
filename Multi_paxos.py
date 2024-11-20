@@ -110,7 +110,10 @@ class NetworkSimulation:
                 
         finally:
             node_socket.close()
-            # self.nodes.remove(node_socket)
+        
+        def send_message(self, to_pid, message):
+            if to_pid < len(self.nodes):
+                self.nodes[to_pid].sendall(message.encode('utf-8'))
 
     def start_node(self):
         """Start a node that connects to the server."""
@@ -133,29 +136,6 @@ class NetworkSimulation:
 
         node_socket.close()
 
-def main():
-    if len(sys.argv) != 3:
-        print("Usage: python network_simulation.py <mode> <base_port>")
-        sys.exit(1)
-
-    mode = sys.argv[1]  # 'server' or 'node'
-    base_port = int(sys.argv[2])
-
-    simulation = NetworkSimulation(base_port)
-
-    if mode == 'server':
-        simulation.start_server()
-    elif mode == 'node':
-        simulation.start_node()
-    else:
-        print("Invalid mode. Use 'server' or 'node'.")
-        sys.exit(1)
-
-if __name__ == "__main__":
-    main()
-
-
-
 # ----------------- Multi-Paxos Implementation -----------------
 
 
@@ -177,7 +157,7 @@ class BallotNumber:
         return (self.seq_num, self.pid, self.op_num) < (other.seq_num, other.pid, other.op_num)
     
 class PaxosNode:
-    def __init__(self, pid: int, network, num_nodes: int):
+    def __init__(self, pid: int, network: NetworkSimulation, num_nodes: int):
         self.pid = pid
         self.network = network
         self.num_nodes = num_nodes
@@ -198,15 +178,10 @@ class PaxosNode:
         self.node_ports = [9001,9002,9003]
         self.server_port = 9000
 
-
-
-
-
-
     def handle_client_request(self, operation):
         # If the node is not the leader, forward the operation to the leader
         if self.who_is_leader != self.pid:
-            self.network.send_message(self.pid, self.who_is_leader, operation)
+            self.network.send_message(self.pid, operation)
         else:
             # If the node is the leader, add the operation to the pending operations queue
             self.pending_operations.put(operation)
@@ -217,13 +192,33 @@ class PaxosNode:
         
         prepare_message = (MessageType.PREPARE, self.ballot_num)
         self.send_prepare(prepare_message) # make this into its own thread, TODO
-
-        
-    
+   
     def send_prepare(self, prepare_message):
         for i in range(self.num_nodes):
             if i != self.pid:
                 self.network.send_message(self.pid, i, prepare_message)
+            
+                
+def main():
+    if len(sys.argv) != 3:
+        print("Usage: python network_simulation.py <mode> <base_port>")
+        sys.exit(1)
+
+    mode = sys.argv[1]  # 'server' or 'node'
+    base_port = int(sys.argv[2])
+
+    simulation = NetworkSimulation(base_port)
+
+    if mode == 'server':
+        simulation.start_server()
+    elif mode == 'node':
+        simulation.start_node()
+    else:
+        print("Invalid mode. Use 'server' or 'node'.")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
 
 
 
