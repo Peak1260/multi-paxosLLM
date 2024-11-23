@@ -34,7 +34,7 @@ class Node:
         self.port = port # Port of process 1 = 9001, process 2 = 9002, process 3 = 9003
         self.peers = peers  # List of (host, port) tuples for other nodes
         self.current_leader = None # Current leader of the network for right now is hardcoded to 1
-        self.ballot_tuple = (0,node_id,0)  # (seq_num, pid, op_num)
+        self.ballot_tuple = [0,node_id,0]  # (seq_num, pid, op_num)
         self.accepted_ballot_num = 0 # Highest ballot number accepted by the acceptor
         self.accepted_val_num = 0 # previous value accepted by the acceptor
         self.count_responses = 0 # ONLY LEADER USES THIS TO DETERMINE A MAJORITY, FOR NOW, ASSUME WE NEED 2
@@ -76,6 +76,7 @@ class Node:
 
     def process_message(self, message):
         # Implement logic to process PREPARE, PROMISE, ACCEPT, DECIDE, etc.
+        time.sleep(2)
         print(f"Node {self.node_id} received: {message}")
 
         if message.startswith("PREPARE"):
@@ -86,14 +87,20 @@ class Node:
     
 
         elif message.startswith("PROMISE"):
+            self.count_responses += 1 
             _, ballot, node_id, accepted_ballot_num, accepted_val_num = message.split()
             ballot = int(ballot)
             node_id = int(node_id)
             accepted_ballot_num = int(accepted_ballot_num)
             accepted_val_num = int(accepted_val_num)
-            self.handle_promise(ballot, node_id, accepted_ballot_num, accepted_val_num)
+            
+            if self.count_responses == 2: # This is to ensure, decide is only done ONCE
+                self.count_responses = 0
+                self.handle_promise(ballot, node_id, accepted_ballot_num, accepted_val_num)
+            else:
+                print("Not enough PROMISE messages received yet")
 
-        if message.startswith("LEADER"):
+        elif message.startswith("LEADER"):
             _, leader_id = message.split()
             leader_id = int(leader_id)
             self.handle_leader(leader_id) 
@@ -132,6 +139,7 @@ class Node:
 
         else: # WE NEED To REMEMBER TO ACTUALLY PROCESS A FORWARDED MESSAGE FROM NON-LEADER NODES #------------- TODO
             print("Different message type")
+            print(message)
 
 
     def broadcast(self, message):
