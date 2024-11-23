@@ -1,5 +1,9 @@
 # NEED TO IMPLEMENT CENTRAL SERVER (9000) that receives all the gemini commands
 
+# We need to implement when a node is not the leader, it forwards the command to the leader
+# Instead of leader broadcasing to all nodes an ACCEPT message or PROMIS message, we need to track the pid from who responded so 
+# we can send the message directly back to the right node that responded
+# Test out replicate operation more times to see if logic holds true
 
 import socket
 import threading
@@ -113,9 +117,9 @@ class Node:
         # ------------------------------------------------------------
         elif message.startswith("ACCEPT "):
             command = message.split(" ", 3)[3]
-            #print("command: ", command) 
+            #print("command: ", command) # for debugging
             list_of_messages = message.split() 
-            #print("list_of_messages: ", list_of_messages) # list_of_messages:  ['ACCEPT', '0', '0', 'create', '0']
+            #print("list_of_messages: ", list_of_messages) # list_of_messages:  ['ACCEPT', '0', '0', 'create', '0'] #for debugging
             ballot = int(list_of_messages[1])
             operation_num = int(list_of_messages[2])
             self.handle_accept(ballot, operation_num, command) # acceptors handle this
@@ -146,6 +150,7 @@ class Node:
         else: # WE NEED To REMEMBER TO ACTUALLY PROCESS A FORWARDED MESSAGE FROM NON-LEADER NODES #------------- TODO
             print("Different message type")
             print(message)
+            # need to replicate a message that was forwarded to the leader by another node
 
 
     def broadcast(self, message):
