@@ -153,13 +153,13 @@ class Node:
 
     # MULTIPAXOS # ----------------------------------------------------------------------------------------------------------------------
     def start_election(self): # Leader sends out PREPARE messages
-        self.ballot_tuple = (self.ballot_tuple[0] + 1, self.node_id, 0)
+        self.ballot_tuple[0] += 1
         prepare_message = f"PREPARE {self.ballot_tuple[0]} {self.node_id}"
         self.broadcast(prepare_message)
 
     def handle_prepare(self, ballot, node_id): # Acceptors reply to leader with PROMISE
         if ballot >= self.ballot_tuple[0]:
-            self.ballot_tuple = (ballot, node_id, self.ballot_tuple[2])  # Update the ballot tuple
+            self.ballot_tuple[0] = ballot  # Update the ballot tuple
             promise_message = f"PROMISE {ballot} {self.node_id} {self.accepted_ballot_num} {self.accepted_val_num}"
             node.send_message(("localhost", 9000 + node_id), promise_message)  # Send promise back to the leader
 
