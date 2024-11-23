@@ -40,6 +40,8 @@ class Node:
         self.count_responses = 0 # ONLY LEADER USES THIS TO DETERMINE A MAJORITY, FOR NOW, ASSUME WE NEED 2
         self.queue = []
         self.contexts = {}
+        self.promise_responses_dict = {} # Dictionary to store the promises received from the acceptors
+        self.myVal = ""
 
         # Initialize server socket
         self.node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -93,10 +95,13 @@ class Node:
             node_id = int(node_id)
             accepted_ballot_num = int(accepted_ballot_num)
             accepted_val_num = int(accepted_val_num)
+
+            self.promise_responses_dict[node_id] = [accepted_ballot_num, accepted_val_num] # mapping response from acceptor to its accepted ballot and value
+
             
             if self.count_responses == 2: # This is to ensure, decide is only done ONCE
                 self.count_responses = 0
-                self.handle_promise(ballot, node_id, accepted_ballot_num, accepted_val_num)
+                self.handle_promise(ballot, accepted_ballot_num, accepted_val_num)
             else:
                 print("Not enough PROMISE messages received yet")
 
@@ -134,8 +139,9 @@ class Node:
 
         elif message.startswith("DECIDE"):
             print("DECIDE message received")
-            command, operation_num = message.split()
-            self.handle_decide(command, operation_num)
+            # _, command = message.split()
+            command = message.split(" ", 1)[1]
+            self.handle_decide(command)
 
         else: # WE NEED To REMEMBER TO ACTUALLY PROCESS A FORWARDED MESSAGE FROM NON-LEADER NODES #------------- TODO
             print("Different message type")
@@ -160,7 +166,8 @@ class Node:
 
 
     # MULTIPAXOS # ----------------------------------------------------------------------------------------------------------------------
-    def start_election(self): # Leader sends out PREPARE messages
+    def start_election(self, command): # Leader sends out PREPARE messages
+        self.myVal = command
         self.ballot_tuple[0] += 1
         prepare_message = f"PREPARE {self.ballot_tuple[0]} {self.node_id}"
         self.broadcast(prepare_message)
@@ -171,26 +178,44 @@ class Node:
             promise_message = f"PROMISE {ballot} {self.node_id} {self.accepted_ballot_num} {self.accepted_val_num}"
             node.send_message(("localhost", 9000 + node_id), promise_message)  # Send promise back to the leader
 
-    def handle_promise(self, ballot, node_id, accepted_ballot_num, accepted_val_num):
+    def replicate_operation(self, command): # Leader sends out Accept messages
+        # logic for obtaiing previously accepted value #------------------------------------------------ TODO
+        accept_message = f"ACCEPT {self.ballot_tuple[0]} {self.ballot_tuple[2]} {command}" # ACCEPT seq_num, op_num, command
+        self.broadcast(accept_message)
+
+
+
+    def handle_promise(self, ballot, accepted_ballot_num, accepted_val_num): # Leader handles all the promomises
         self.current_leader = self.node_id
         print(f"Current leader set to: {self.current_leader}")
         leader_message = f"LEADER {self.current_leader}"
-        self.broadcast(leader_message) 
+        self.broadcast(leader_message) # Broadcast to all nodes who the leader is
 
-        if ballot == self.ballot_tuple[0]:
-            if accepted_ballot_num > self.accepted_ballot_num:
-                self.accepted_ballot_num = accepted_ballot_num
-                self.accepted_val_num = accepted_val_num
-
-            # Determine the value to accept
-            if self.accepted_val_num == 0:  # Assuming 0 means no value was accepted
-                command = 0
+        # Leader is going to look at dictionary of promises and determine the highest ballot number and value
+        # first the leader will check if every acceptor has an acceptvalnum of 0 so leader can use its command
+        # psudocode: if all acceptvals are 0, then send out my command in accept message
+        counter_of_acceptvals = 0
+        highest_accepted_ballot_num = 0
+        for accepted_thing in self.promise_responses_dict.values():  
+            if accepted_thing[1] == 0:
+                counter_of_acceptvals += 1
             else:
-                command = self.accepted_val_num  # Use the received value with the highest ballot
+                if accepted_thing[0] > highest_accepted_ballot_num:
+                    highest_accepted_ballot_num = accepted_thing[0]
 
-            # Send "ACCEPT" message to all peers
-            accept_message = f"ACCEPT {self.ballot_tuple[0]} {self.ballot_tuple[2]} {command}"  # Use command instead of my_val
-            self.broadcast(accept_message)  # Send to all peers
+        if counter_of_acceptvals == 2: # If all acceptvals are 0, then send out my command in accept message
+            self.accepted_val_num = self.myVal # 
+        else:
+            for accepted_thing in self.promise_responses_dict.values():
+                if accepted_thing[0] == highest_accepted_ballot_num:
+                    self.myVal = accepted_thing[1]
+                    self.accepted_val_num = accepted_thing[1]
+                    break
+    
+        command = self.accepted_val_num # same as myVal
+        # Send "ACCEPT" message to all peers
+        accept_message = f"ACCEPT {self.ballot_tuple[0]} {self.ballot_tuple[2]} {command}"  # Use command instead of my_val
+        self.broadcast(accept_message)  # Send to all peers
 
     def handle_leader(self, leader_id):
         self.current_leader = leader_id
@@ -219,13 +244,15 @@ class Node:
     
     def decide_operation(self, command): # Leader sends out DECIDE messages
         decide_message = f"DECIDE {command}"
+        # leader now increments operation number 
+        self.ballot_tuple[2] += 1
         self.broadcast(decide_message)
         self.send_to_central_server(command)
 
 
 
-    def handle_decide(self, command, operation_num): # Acceptors apply the operation_num locally
-        self.apply_operation(operation_num)
+    def handle_decide(self, command): # Acceptors apply the operation_num locally
+        # self.apply_operation(command)
         self.send_to_central_server(command)
 
 
@@ -279,7 +306,8 @@ if __name__ == "__main__":
         command = input("Enter command for nodes: ")
         if node.current_leader == node_id:
             print("I am Leader: Replicating operation_num...")
-            node.handle_promise(command)
+            node.replicate_operation(command)
+            
 
 
         elif node.current_leader: # Forward command to leader
@@ -289,4 +317,4 @@ if __name__ == "__main__":
 
         else:
             print("No leader. Need to start election...")
-            node.start_election()
+            node.start_election(command)
