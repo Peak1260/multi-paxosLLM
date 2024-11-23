@@ -143,14 +143,12 @@ class Node:
 
         elif message.startswith("DECIDE"):
             print("DECIDE message received")
-            # _, command = message.split()
             command = message.split(" ", 1)[1]
             self.handle_decide(command)
 
-        else: # WE NEED To REMEMBER TO ACTUALLY PROCESS A FORWARDED MESSAGE FROM NON-LEADER NODES #------------- TODO
-            print("Different message type")
-            print(message)
-            # need to replicate a message that was forwarded to the leader by another node
+        else: 
+            print("Replicating operations:", message)
+            self.replicate_operation(message)
 
 
     def broadcast(self, message):
@@ -166,8 +164,6 @@ class Node:
         s.connect(peer)
         s.sendall(message.encode())
         s.close()
-
-
 
 
     # MULTIPAXOS # ----------------------------------------------------------------------------------------------------------------------
@@ -275,23 +271,6 @@ class Node:
             print(self.contexts.get(args[0], "Context not found"))
         elif op_type == "viewall":
             print(self.contexts)
-    
-
-    # -----------------LEADER ELECTION DOESN'T WORK YET------------------------------------------
-    # def monitor_leader(self):
-    #     while True:
-    #         time.sleep(5)
-    #         if self.current_leader is None or not self.check_leader_alive():
-    #             self.start_election()
-
-    # def check_leader_alive(self): # Hardcoding that node 1 is always the leader
-    #     # Implement a mechanism to verify leader liveness (e.g., heartbeat)
-    #     if self.node_id ==  1:
-    #         return True 
-    #     return False
-
-
-
 
 if __name__ == "__main__":
     import sys
@@ -313,12 +292,9 @@ if __name__ == "__main__":
             print("I am Leader: Replicating operation_num...")
             node.replicate_operation(command)
             
-
-
         elif node.current_leader: # Forward command to leader
             print("I am NOT Leader: Forwarding command to leader...")
             node.send_message(("localhost", 9000 + node.current_leader), command)
-            # node.send_message(node.current_leader, command) # ------------------------------------------- testing
 
         else:
             print("No leader. Need to start election...")
