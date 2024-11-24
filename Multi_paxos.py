@@ -1,317 +1,292 @@
-# We will be implementing multi paxos algorithm in this file
-from dataclasses import dataclass
-from typing import Dict, Set, Tuple, Optional, List
-from enum import Enum
-import threading
-import queue
+# NEED TO TALK to gemini (all nodes)
+# NEED TO update central server to failnode, fixnode, etc. 
+
+
 import socket
-import sys
+import threading
 import time
 
-'''
-Each node should keep track of the current leader of the system. If an acceptor receives an operation
-on its command line interface, it should forward the operation to the leader. The leader should
-respond back to the acceptor with an acknowledgement that the request has been received and place
-the operation into its local queue. If this acceptor doesn’t receive an acknowledgement from the
-leader, then it should time out and become a proposer to propose the operation. If the acceptor
-receives an acknowledgement, then the acceptor no longer needs to remember the operation. If an
-acceptor receives an operation and doesn’t know who the leader is, it should also become a proposer.
-If another acceptor receives a forwarded operation, it should forward the operation to its known
-leader. 
-
-Multi-Paxos is an extension of Paxos where an existing leader who have already decided on a single
-operation will stay as the leader for subsequent operations instead of starting a leader election for
-every new entry.
-A ballot number in Multi-Paxos should be a 3-tuple: <seq_num, pid, op_num>, where op_num
-captures the number of consensus operations that have been executed (i.e. create a context, create
-a query in a context, and save a selected answer). The flow for your implementation of the protocol
-should look similar to the following:
-
-1. Election Phase: A node intending to become the leader becomes a proposer and broadcasts
-PREPARE messages with its ballot number to all acceptors.
-
-2. A proposer must obtain a majority of PROMISE messages from acceptors for its ballot number
-to become the leader
-
-3. An acceptor should NOT reply PROMISE to a PREPARE if the acceptor’s number of operations
-is larger than the op num from the ballot number
-
-4. Replication/Normal Phase: Once a node becomes the leader, it should maintain a queue
-of pending operations waiting for consensus from the system
-
-5. The leader then broadcasts ACCEPT messages with the next pending operation to all acceptors
-
-6. An acceptor should NOT reply ACCEPTED to an ACCEPT if the acceptor’s number of applied
-operations is greater than the op num from the ballot number
-
-7. Decision Phase: After a majority of acceptors reply ACCEPTED to the leader, the leader will
-Remove the operation from its queue
-    • Broadcast DECIDE messages to all nodes
-    • Apply the appropriate operation (creating a new context, querying, or selecting an answer). 
-    Note that the leader needs to also tell other nodes which server that the creating
-    a query request originated from so that other nodes know where to forward the server
-    response.
-
-8. Upon receiving the DECIDE message from the leader, an acceptor will similarly apply the
-appropriate operations.
-
-9. The leader should start a new normal/replication phase for the next pending operation in its
-queue with an updated ballot number
-
-'''
-
-# Network2.py
-
-
-
-class NetworkSimulation:
-    def __init__(self, base_port):
-        self.base_port = base_port
-        self.server_socket = None
-        self.nodes = []
-        self.node_ports = []
-
-    def start_server(self):
-        """Start the server to listen for incoming node connections."""
+class CentralServer:
+    def __init__(self, port=9000):
+        self.port = port
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server_socket.bind(('localhost', self.base_port))
+        self.server_socket.bind(('localhost', self.port))
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_socket.listen(5)
-        print(f"Server started on port {self.base_port}")
-        
-        # Accept connections from nodes
-        while True:
-            node_socket, node_address = self.server_socket.accept()
-            print(f"New connection from {node_address}")
-            
-            # Assign a dynamic port for this node and send it back to the node
-            assigned_port = self.base_port + len(self.nodes) + 1  # Assign a unique port
-            self.node_ports.append(assigned_port)
-            node_socket.sendall(str(assigned_port).encode('utf-8'))
-            print(f"Assigned port {assigned_port} to new node")
-            
-            self.nodes.append(node_socket)
-            threading.Thread(target=self.handle_node, args=(node_socket, assigned_port)).start()
 
-    def handle_node(self, node_socket, assigned_port):
-        """Handle communication with a single node."""
+    def start(self):
+        print(f"Central server started on port {self.port}")
+        while True:
+            conn, addr = self.server_socket.accept()
+            #print(f"Connection received from {addr}")
+            threading.Thread(target=self.handle_node_connection, args=(conn,)).start()
+
+    def handle_node_connection(self, conn):
         try:
-            while True:
-                message = node_socket.recv(1024).decode('utf-8')
-
-                
-                if not message:
-                    break
-                print(f"Received: {message}\n")
-                
-                # Relay the message to all other nodes
-                for other_node_socket in self.nodes:
-                    if other_node_socket != node_socket:
-                        other_node_socket.sendall(message.encode('utf-8'))
-                
+            data = conn.recv(1024).decode()
+            if data:
+                print(f"Central server received value: {data}")
         finally:
-            node_socket.close()
+            conn.close()
+
+class Node:
+    def __init__(self, node_id, port, peers):
+        self.node_id = node_id # ID of process 1 = 1, process 2 = 2, process 3 = 3
+        self.port = port # Port of process 1 = 9001, process 2 = 9002, process 3 = 9003
+        self.peers = peers  # List of (host, port) tuples for other nodes
+        self.current_leader = None # Current leader of the network for right now is hardcoded to 1
+        self.ballot_tuple = [0,node_id,0]  # (seq_num, pid, op_num)
+        self.accepted_ballot_num = 0 # Highest ballot number accepted by the acceptor
+        self.accepted_val_num = 0 # previous value accepted by the acceptor
+        self.count_responses = 0 # ONLY LEADER USES THIS TO DETERMINE A MAJORITY, FOR NOW, ASSUME WE NEED 2
+        self.queue = []
+        self.contexts = {}
+        self.promise_responses_dict = {} # Dictionary to store the promises received from the acceptors
+        self.myVal = ""
+
+        # Initialize server socket
+        self.node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.node_socket.bind(('localhost', self.port))
+        self.node_socket.listen(5)
         
-    def send_message(self, to_pid, message): # pretend send message to other processes works
-        if to_pid < len(self.nodes):
-            self.nodes[to_pid].sendall(message.encode('utf-8'))
+    def start(self):
+        print(f"Node {self.node_id} started on port {self.port}")
+        threading.Thread(target=self.listen).start()
 
-    def start_node(self):
-        """Start a node that connects to the server."""
-        node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        node_socket.connect(('localhost', self.base_port))
-        print(f"Node connected to server on port {self.base_port}")
-        
-        # Receive the assigned port from the server
-        assigned_port = int(node_socket.recv(1024).decode('utf-8'))
-        print(f"Node assigned port {assigned_port}")
-
-        threading.Thread(target=self.handle_node, args=(node_socket, assigned_port)).start() # --------------------------
-
-        # Send a test message to the server
+    def listen(self):
         while True:
-            message = input(f"Node {assigned_port} - Enter message: ")
-            if message.lower() == 'exit':
-                break
-            node_socket.sendall(message.encode('utf-8'))
+            conn, addr = self.node_socket.accept()
+            #print (f"Node {self.node_id} connected to {addr}")
+            threading.Thread(target=self.handle_connection, args=(conn,)).start()
 
-        node_socket.close()
+    def handle_connection(self, conn):
+        try:
+            data = conn.recv(1024).decode()
+            if data:
+                self.process_message(data)
+        finally:
+            conn.close()
 
+    def send_to_central_server(self, value):
+        central_server_port = 9000  
+        print(f"Node {self.node_id} sending value to central server: {value}")
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect(('localhost', central_server_port))
+            s.sendall(value.encode())
+        finally:
+            s.close()
 
+    def process_message(self, message):
+        # Implement logic to process PREPARE, PROMISE, ACCEPT, DECIDE, etc.
+        print(f"Node {self.node_id} received: {message}")
 
-
-
-
-
-# ----------------- Multi-Paxos Implementation -----------------
-
-
-class MessageType(Enum):
-    PREPARE = "PREPARE"
-    PROMISE = "PROMISE"
-    ACCEPT = "ACCEPT"
-    ACCEPTED = "ACCEPTED"
-    DECIDE = "DECIDE"
-
-
-@dataclass
-class BallotNumber:
-    seq_num: int
-    pid: int
-    op_num: int
-
-    def __lt__(self, other):
-        return (self.seq_num, self.pid, self.op_num) < (other.seq_num, other.pid, other.op_num)
+        if message.startswith("PREPARE"): # Acceptors handle this
+            time.sleep(3)
+            _, ballot, node_id = message.split()
+            ballot = int(ballot)
+            node_id = int(node_id)
+            self.handle_prepare(ballot, node_id)
     
-class PaxosNode:
-    def __init__(self, pid: int, network: NetworkSimulation, num_nodes: int):
-        self.pid = pid
-        self.network = network
-        self.num_nodes = num_nodes
-        
-        # Everyone should have AcceptNum, AcceptVal, BallotNum, Leader
-        self.accept_num = None
-        self.accept_val = None
-        self.current_operation_num = 0
-        self.ballot_num = BallotNumber(0, self.pid, 0) # Initial Ballot Number
-        self.consensus_val = None
-        # self.isleader = False
-        self.who_is_leader = None
-        self.promise_counter = 0 # only the leader will modify this variable
-        self.highest_accept_num = 0
-        
 
-        # Leader should have a queue of pending operations
-        self.pending_operations = queue.Queue() # only the leaader has this
+        elif message.startswith("PROMISE"): # Leader handles this
+            time.sleep(3)
+            _, ballot, node_id, accepted_ballot_num, accepted_val_num = message.split()
+            ballot = int(ballot)
+            node_id = int(node_id)
+            accepted_ballot_num = int(accepted_ballot_num)
+            accepted_val_num = int(accepted_val_num)
 
-        self.accepted_operations: List[Tuple[BallotNumber, int]] = [] # (ballot_num, op_num)
+            self.promise_responses_dict[node_id] = [accepted_ballot_num, accepted_val_num] # mapping response from acceptor to its accepted ballot and value
 
-        self.node_ports = [9001,9002,9003]
-        self.server_port = 9000
+            self.handle_promise(ballot, accepted_ballot_num, accepted_val_num, node_id)
 
-    def handle_client_request(self, operation):
-        # If the node is not the leader, forward the operation to the leader
-        if self.who_is_leader != self.pid:
-            self.network.send_message(self.pid, operation)
+
+        elif message.startswith("LEADER"):
+            time.sleep(1)
+            _, leader_id = message.split()
+            leader_id = int(leader_id)
+            self.handle_leader(leader_id) 
+
+        # ------------------------------------------------------------
+        elif message.startswith("ACCEPT "):
+            time.sleep(3)
+            command = message.split(" ", 3)[3]
+            #print("command: ", command) # for debugging
+            list_of_messages = message.split() 
+            #print("list_of_messages: ", list_of_messages) # list_of_messages:  ['ACCEPT', '0', '0', 'create', '0'] #for debugging
+            ballot = int(list_of_messages[1])
+            operation_num = int(list_of_messages[2])
+            self.handle_accept(ballot, operation_num, command) # acceptors handle this
+
+
+        elif message.startswith("ACCEPTED"): # Leader handles this
+            # Message looks like: ACCEPTED 0 3 create 0
+            time.sleep(3)
+            command = message.split(" ", 3)[3]
+
+            # We want to parse out the node_id
+            list_of_messages = message.split()
+            node_id = int(list_of_messages[2])
+            # print("ACCEPTED node_id: ", node_id) # for debugging
+
+            self.decide_operation(command, node_id)          
+
+        elif message.startswith("DECIDE"):
+            time.sleep(3)
+            print("DECIDE message received")
+            command = message.split(" ", 1)[1]
+            self.handle_decide(command)
+
+        else: 
+            time.sleep(3)
+            print("Replicating operations:", message)
+            self.replicate_operation(message)
+
+
+    def broadcast(self, message):
+        print(f"Node {self.node_id} broadcasting: {message}")
+        for peer in self.peers:
+            if (self.peers[1] != self.port):
+                self.send_message(peer, message)
+
+
+    def send_message(self, peer, message):
+        print(f"Node {self.node_id} sending to {peer}: {message}")
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect(peer)
+        s.sendall(message.encode())
+        s.close()
+
+
+    # MULTIPAXOS # ----------------------------------------------------------------------------------------------------------------------
+    def start_election(self, command): # Leader sends out PREPARE messages
+        self.myVal = command
+        self.ballot_tuple[0] += 1
+        prepare_message = f"PREPARE {self.ballot_tuple[0]} {self.node_id}"
+        self.broadcast(prepare_message)
+
+    def handle_prepare(self, ballot, node_id): # Acceptors reply to leader with PROMISE
+        if ballot >= self.ballot_tuple[0]:
+            self.ballot_tuple[0] = ballot  # Update the ballot tuple
+            promise_message = f"PROMISE {ballot} {self.node_id} {self.accepted_ballot_num} {self.accepted_val_num}"
+            node.send_message(("localhost", 9000 + node_id), promise_message)  # Send promise back to the leader
+
+    def replicate_operation(self, command): # Leader sends out Accept messages
+        accept_message = f"ACCEPT {self.ballot_tuple[0]} {self.ballot_tuple[2]} {command}" # ACCEPT seq_num, op_num, command
+
+        self.broadcast(accept_message)
+
+    def handle_promise(self, ballot, accepted_ballot_num, accepted_val_num, node_id): # Leader handles all the promomises
+        self.current_leader = self.node_id
+        leader_message = f"LEADER {self.current_leader}"
+        # DON'T BROADCAST LEADER MESSAGE, SEND TO THE RIGHT NODE WHO RESPONDED TO THE PROMISE
+        self.send_message(("localhost", 9000 + node_id), leader_message)
+
+        # Leader is going to look at dictionary of promises and determine the highest ballot number and value
+        # first the leader will check if every acceptor has an acceptvalnum of 0 so leader can use its command
+        # psudocode: if all acceptvals are 0, then send out my command in accept message
+        counter_of_acceptvals = 0
+        highest_accepted_ballot_num = 0
+        for accepted_thing in self.promise_responses_dict.values(): # accepted_thing = [accepted_ballot_num, accepted_val_num]
+            if accepted_thing[1] == 0: # if acceptval is 0
+                counter_of_acceptvals += 1 # increment counter
+            else:
+                if accepted_thing[0] > highest_accepted_ballot_num: # if acceptval is not 0, then check if the ballot number is higher than the current highest
+                    highest_accepted_ballot_num = accepted_thing[0] # update the highest accepted ballot number
+
+        if counter_of_acceptvals == len(peers): # If all acceptvals are 0, then send out my command in accept message
+            self.accepted_val_num = self.myVal # set accepted value to myVal
         else:
-            # If the node is the leader, add the operation to the pending operations queue
-            self.pending_operations.put(operation)
-            self.propose_operation()
+            for accepted_thing in self.promise_responses_dict.values(): # accepted_thing = [accepted_ballot_num, accepted_val_num]
+                if accepted_thing[0] == highest_accepted_ballot_num: # if the ballot number is the highest, then set the accepted value to that
+                    self.myVal = accepted_thing[1] # set myVal to the accepted value
+                    self.accepted_val_num = accepted_thing[1] # set accepted value to the accepted value
+                    break
     
-    def start_election(self):
-        self.ballot_num = BallotNumber(self.ballot_num.seq_num + 1, self.pid, self.current_operation_num)
-        
-        prepare_message = (MessageType.PREPARE, self.ballot_num)
-        self.send_prepare(prepare_message) # make this into its own thread, TODO
-   
-    def send_prepare(self, prepare_message):
-        for i in range(self.num_nodes):
-            if i != self.pid:
-                self.network.send_message(self.pid, i, prepare_message)
+        command = self.accepted_val_num # same as myVal
+        # Send "ACCEPT" message to all peers
+        accept_message = f"ACCEPT {self.ballot_tuple[0]} {self.ballot_tuple[2]} {command}"  # Use command instead of my_val
 
+        node.send_message(("localhost", 9000 + node_id), accept_message)  # Send accept message to the right node who responded to the promise
 
-    def handle_message(self, message: Dict):
-        message_type = message['type']
+    def handle_leader(self, leader_id):
+        self.current_leader = leader_id
+        print(f"Node {self.node_id} recognizes Node {self.current_leader} as the leader.")
 
-        if message_type == MessageType.PREPARE:
-            self.handle_prepare(message)
-        elif message_type == MessageType.PROMISE:
-            self.handle_promise(message)
-        elif message_type == MessageType.ACCEPT:
-            self.handle_accept(message)
-        elif message_type == MessageType.ACCEPTED:
-            self.handle_accepted(message)
-        elif message_type == MessageType.DECIDE:
-            self.handle_decide(message)
-        
-        
-        # if message_type == MessageType.PREPARE:
-        #     self.handle_prepare(message_data)
-        # elif message_type == MessageType.PROMISE:
-        #     self.handle_promise(message_data)
-        # elif message_type == MessageType.ACCEPT:
-        #     self.handle_accept(message_data)
-        # elif message_type == MessageType.ACCEPTED:
-        #     self.handle_accepted(message_data)
-        # elif message_type == MessageType.DECIDE:
-        #     self.handle_decide(message_data)
-    
-    def handle_prepare(self, message: Dict): # Acceptors send to Leader a Promis message 
-        ballot_num = message['ballot_num']
+    def handle_accept(self, ballot, operation_num, command): # Acceptors Reply to leader with Accepted
+        if ballot >= self.accepted_ballot_num:
+            self.queue.append(operation_num)
 
+            self.accepted_ballot_num = ballot
+            self.accepted_val_num = command
 
-        if ballot_num > self.ballot_num:
-            self.ballot_num = ballot_num
-            promise_message = (MessageType.PROMISE, self.accept_num, self.accept_val)
-            self.network.send_message(self.pid, promise_message)
-        else:
-            print ("Ballot number is not greater than current ballot number")
-
-    def handle_promise(self, pid, promise_message): # Leader receives Promis message from Acceptors
-        # Leader will get a response from a majority of acceptors which could be 1 or 2 acceptors
-        # If messagetype is a PROMISE, increment a promise counter
-        self.promise_counter += 1
-
-        if self.promise_counter == 1:
-            if promise_message[2] == None:
-                accept_message = (MessageType.ACCEPT, self.ballot_num, self.consensus_val)
-
-            if promise_message[1] > self.highest_accept_num:
-                self.highest_accept_num = promise_message[1]
-                self.accept_val = promise_message[2]
-                self.accept_num = promise_message[1]
-
-                accept_message = (MessageType.ACCEPT, self.ballot_num, self.accept_val)
+            accepted_message = f"ACCEPTED {ballot} {self.node_id} {command}"
+            # respond to leader with accepted message
             
-        elif self.promise_counter == 2:
-
-
-
-        self.network.send_message(self.pid, accept_message)
-
-            
-        
-
-
-        
-
-
-
-
-    
-            
+            if self.current_leader is not None:
+                self.send_message(("localhost", 9000 + self.current_leader), accepted_message) 
                 
-def main():
-    if len(sys.argv) != 3:
-        print("Usage: python network_simulation.py <mode> <base_port>")
-        sys.exit(1)
+            else:
+                print("Current leader is not set. Cannot send ACCEPTED message.")
 
-    mode = sys.argv[1]  # 'server' or 'node'
-    base_port = int(sys.argv[2])
+    def decide_operation(self, command, node_id): # Leader sends out DECIDE messages
+        decide_message = f"DECIDE {command}"
+        # leader now increments operation number 
+        self.ballot_tuple[2] += 1
 
-    simulation = NetworkSimulation(base_port)
+        self.send_message(("localhost", 9000 + node_id), decide_message) # Send to the right node who responded to the promise
+        
+        self.count_responses += 1
+       
+        if self.count_responses == 1:
+            self.send_to_central_server(command) #send to gemini
+        elif self.count_responses == len(self.peers):
+            self.count_responses = 0
 
-    if mode == 'server':
-        simulation.start_server()
-    elif mode == 'node':
-        simulation.start_node()
-    else:
-        print("Invalid mode. Use 'server' or 'node'.")
-        sys.exit(1)
+    def handle_decide(self, command): # Acceptors apply the operation_num locally
+        self.send_to_central_server(command) #send to gemini
+
+
+    def apply_operation(self, operation_num):
+        op_type, *args = operation_num.split()
+        if op_type == "create":
+            self.contexts[args[0]] = []
+        elif op_type == "query":
+            context_id, query_string = args
+            self.contexts[context_id].append(query_string)
+        elif op_type == "choose":
+            # Handle LLM response selection logic here
+            pass
+        elif op_type == "view":
+            print(self.contexts.get(args[0], "Context not found"))
+        elif op_type == "viewall":
+            print(self.contexts)
 
 if __name__ == "__main__":
-    main()
+    import sys
+    node_id = int(sys.argv[1])
+    port = 9000 + node_id
+    peers = [("localhost", 9000 + i + 1) for i in range(3) if (i+1) != node_id]
+    print(f"Node {node_id} peers: {peers}") # for debugging
+    if node_id != 0:
+        node = Node(node_id, port, peers)
+        threading.Thread(target = node.start).start()
 
+    if node_id == 0:  # Start the Central Server only on node 0
+        server = CentralServer()
+        threading.Thread(target=server.start).start()
 
+    while True:
+        command = input()
+        if node.current_leader == node_id:
+            print("I am Leader: Replicating operation_num...")
+            node.replicate_operation(command)
+            
+        elif node.current_leader: # Forward command to leader
+            print("I am NOT Leader: Forwarding command to leader...")
+            node.send_message(("localhost", 9000 + node.current_leader), command)
 
-
-
-
-
-
-
-
-
-
-
-
-
+        else:
+            print("No leader. Need to start election...")
+            node.start_election(command)
