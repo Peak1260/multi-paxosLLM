@@ -1,9 +1,9 @@
 # NEED TO IMPLEMENT CENTRAL SERVER (9000) that receives all the gemini commands
 
-# We need to implement when a node is not the leader, it forwards the command to the leader
+# We need to implement when a node is not the leader, it forwards the command to the leader - DONE
 # Instead of leader broadcasing to all nodes an ACCEPT message or PROMIS message, we need to track the pid from who responded so 
-# we can send the message directly back to the right node that responded
-# Test out replicate operation more times to see if logic holds true
+# We can send the message directly back to the right node that responded
+# Test out replicate operation more times to see if logic holds true - DONE
 
 import socket
 import threading
@@ -82,18 +82,18 @@ class Node:
 
     def process_message(self, message):
         # Implement logic to process PREPARE, PROMISE, ACCEPT, DECIDE, etc.
-        time.sleep(2)
+        time.sleep(3)
         print(f"Node {self.node_id} received: {message}")
 
-        if message.startswith("PREPARE"):
+        if message.startswith("PREPARE"): # Acceptors handle this
             _, ballot, node_id = message.split()
             ballot = int(ballot)
             node_id = int(node_id)
             self.handle_prepare(ballot, node_id)
     
 
-        elif message.startswith("PROMISE"):
-            self.count_responses += 1 
+        elif message.startswith("PROMISE"): # Leader handles this
+            # self.count_responses += 1 
             _, ballot, node_id, accepted_ballot_num, accepted_val_num = message.split()
             ballot = int(ballot)
             node_id = int(node_id)
@@ -102,12 +102,13 @@ class Node:
 
             self.promise_responses_dict[node_id] = [accepted_ballot_num, accepted_val_num] # mapping response from acceptor to its accepted ballot and value
 
+            self.handle_promise(ballot, accepted_ballot_num, accepted_val_num, node_id)
             
-            if self.count_responses == 2: # This is to ensure, decide is only done ONCE
-                self.count_responses = 0
-                self.handle_promise(ballot, accepted_ballot_num, accepted_val_num)
-            else:
-                print("Not enough PROMISE messages received yet")
+            # if self.count_responses == 2: # This is to ensure, decide is only done ONCE
+            #     self.count_responses = 0
+            #     self.handle_promise(ballot, accepted_ballot_num, accepted_val_num, node_id)
+            # else:
+            #     print("Not enough PROMISE messages received yet")
 
         elif message.startswith("LEADER"):
             _, leader_id = message.split()
@@ -127,17 +128,25 @@ class Node:
 
         elif message.startswith("ACCEPTED"): # Leader handles this
             # Message looks like: ACCEPTED 0 3 create 0
-            self.count_responses += 1 
+            # self.count_responses += 1 
             command = message.split(" ", 3)[3]
+
+            # We want to parse out the node_id
+            list_of_messages = message.split()
+            node_id = int(list_of_messages[2])
+            # print("ACCEPTED node_id: ", node_id) # for debugging
             
             # LOGIC FOR HANDLING ACCEPTED MESSAGES # ------------------------------------------------ TODO
 
-            if self.current_leader == self.node_id:
-                if self.count_responses == 2: # This is to ensure, decide is only done ONCE
-                    self.count_responses = 0
-                    self.decide_operation(command)
-                else:
-                    print("Not enough ACCEPTED messages received yet")
+
+            self.decide_operation(command, node_id)
+
+            # if self.current_leader == self.node_id:
+            #     if self.count_responses == 2: # This is to ensure, decide is only done ONCE
+            #         self.count_responses = 0
+            #         self.decide_operation(command)
+            #     else:
+            #         print("Not enough ACCEPTED messages received yet")
                     
                 
 
@@ -172,51 +181,67 @@ class Node:
         self.ballot_tuple[0] += 1
         prepare_message = f"PREPARE {self.ballot_tuple[0]} {self.node_id}"
         self.broadcast(prepare_message)
+        time.sleep(1)
 
     def handle_prepare(self, ballot, node_id): # Acceptors reply to leader with PROMISE
         if ballot >= self.ballot_tuple[0]:
             self.ballot_tuple[0] = ballot  # Update the ballot tuple
             promise_message = f"PROMISE {ballot} {self.node_id} {self.accepted_ballot_num} {self.accepted_val_num}"
             node.send_message(("localhost", 9000 + node_id), promise_message)  # Send promise back to the leader
+            time.sleep(1)
 
     def replicate_operation(self, command): # Leader sends out Accept messages
         # logic for obtaiing previously accepted value #------------------------------------------------ TODO
         accept_message = f"ACCEPT {self.ballot_tuple[0]} {self.ballot_tuple[2]} {command}" # ACCEPT seq_num, op_num, command
+        
+        # send to the other peers
+        # for peer in self.peers:
+        #     self.send_message(peer, accept_message)
+
         self.broadcast(accept_message)
 
 
 
-    def handle_promise(self, ballot, accepted_ballot_num, accepted_val_num): # Leader handles all the promomises
+    def handle_promise(self, ballot, accepted_ballot_num, accepted_val_num, node_id): # Leader handles all the promomises
         self.current_leader = self.node_id
-        print(f"Current leader set to: {self.current_leader}")
+        # print(f"Current leader set to: {self.current_leader}")
         leader_message = f"LEADER {self.current_leader}"
-        self.broadcast(leader_message) # Broadcast to all nodes who the leader is
+        # self.broadcast(leader_message) # Broadcast to all nodes who the leader is
+        # DON'T BROADCAST LEADER MESSAGE, SEND TO THE RIGHT NODE WHO RESPONDED TO THE PROMISE
+        self.send_message(("localhost", 9000 + node_id), leader_message)
 
         # Leader is going to look at dictionary of promises and determine the highest ballot number and value
         # first the leader will check if every acceptor has an acceptvalnum of 0 so leader can use its command
         # psudocode: if all acceptvals are 0, then send out my command in accept message
         counter_of_acceptvals = 0
         highest_accepted_ballot_num = 0
-        for accepted_thing in self.promise_responses_dict.values():  
-            if accepted_thing[1] == 0:
-                counter_of_acceptvals += 1
+        for accepted_thing in self.promise_responses_dict.values(): # accepted_thing = [accepted_ballot_num, accepted_val_num]
+            if accepted_thing[1] == 0: # if acceptval is 0
+                counter_of_acceptvals += 1 # increment counter
             else:
-                if accepted_thing[0] > highest_accepted_ballot_num:
-                    highest_accepted_ballot_num = accepted_thing[0]
+                if accepted_thing[0] > highest_accepted_ballot_num: # if acceptval is not 0, then check if the ballot number is higher than the current highest
+                    highest_accepted_ballot_num = accepted_thing[0] # update the highest accepted ballot number
 
-        if counter_of_acceptvals == 2: # If all acceptvals are 0, then send out my command in accept message
-            self.accepted_val_num = self.myVal # 
+        if counter_of_acceptvals == len(peers): # If all acceptvals are 0, then send out my command in accept message
+            self.accepted_val_num = self.myVal # set accepted value to myVal
         else:
-            for accepted_thing in self.promise_responses_dict.values():
-                if accepted_thing[0] == highest_accepted_ballot_num:
-                    self.myVal = accepted_thing[1]
-                    self.accepted_val_num = accepted_thing[1]
+            for accepted_thing in self.promise_responses_dict.values(): # accepted_thing = [accepted_ballot_num, accepted_val_num]
+                if accepted_thing[0] == highest_accepted_ballot_num: # if the ballot number is the highest, then set the accepted value to that
+                    self.myVal = accepted_thing[1] # set myVal to the accepted value
+                    self.accepted_val_num = accepted_thing[1] # set accepted value to the accepted value
                     break
     
         command = self.accepted_val_num # same as myVal
         # Send "ACCEPT" message to all peers
         accept_message = f"ACCEPT {self.ballot_tuple[0]} {self.ballot_tuple[2]} {command}"  # Use command instead of my_val
-        self.broadcast(accept_message)  # Send to all peers
+
+        node.send_message(("localhost", 9000 + node_id), accept_message)  # Send accept message to the right node who responded to the promise
+        time.sleep(1)
+
+        # DONT WANT TO BROADCAST ACCEPT MESSAGE, SEND TO THE RIGHT NODE WHO RESPONDED TO THE PROMISE
+        # self.broadcast(accept_message)  # Send to all peers
+
+
 
     def handle_leader(self, leader_id):
         self.current_leader = leader_id
@@ -224,7 +249,7 @@ class Node:
     
 
     def handle_accept(self, ballot, operation_num, command): # Acceptors Reply to leader with Accepted
-        print(f"Current leader set to: {self.current_leader}")
+        # print(f"Current leader set to: {self.current_leader}")
         if ballot >= self.accepted_ballot_num:
             self.queue.append(operation_num)
 
@@ -236,19 +261,42 @@ class Node:
             
             
             if self.current_leader is not None:
-            # Wait 3 seconds
-                time.sleep(3)
                 self.send_message(("localhost", 9000 + self.current_leader), accepted_message) 
+                
             else:
                 print("Current leader is not set. Cannot send ACCEPTED message.")
+            
+        time.sleep(1)
 
     
-    def decide_operation(self, command): # Leader sends out DECIDE messages
+    def decide_operation(self, command, node_id): # Leader sends out DECIDE messages
         decide_message = f"DECIDE {command}"
         # leader now increments operation number 
         self.ballot_tuple[2] += 1
-        self.broadcast(decide_message)
-        self.send_to_central_server(command)
+        self.count_responses += 1
+        print("count_responses: ", self.count_responses)
+
+
+        # DON'T BROADCAST DECIDE MESSAGE, SEND TO THE RIGHT NODE WHO RESPONDED TO THE PROMISE
+        # self.broadcast(decide_message)
+
+
+        # if self.current_leader != self.node_id:
+        self.send_message(("localhost", 9000 + node_id), decide_message) # Send to the right node who responded to the promise
+
+        # self.send_message(("localhost", 9000 + self.current_leader), decide_message) # Send to the right node who responded to the promise
+       
+        if self.count_responses == 1:
+            print("Node {self.node_id} sending value to central server: {command}", self.node_id, command)
+            # self.send_to_central_server(command)
+            self.send_message(("localhost", 9000 + self.current_leader), decide_message)
+        elif self.count_responses == len(self.peers):
+            print("Reseting count_responses")
+            self.count_responses = 0
+            print("count_responses: ", self.count_responses)
+
+        time.sleep(1)
+
 
 
 
@@ -287,7 +335,7 @@ if __name__ == "__main__":
         threading.Thread(target=server.start).start()
 
     while True:
-        command = input("Enter command for nodes: ")
+        command = input()
         if node.current_leader == node_id:
             print("I am Leader: Replicating operation_num...")
             node.replicate_operation(command)
