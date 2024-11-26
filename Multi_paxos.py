@@ -268,6 +268,19 @@ class Node:
             print(f"Node {self.node_id} created context:", self.contexts)
 
         elif command.startswith("query"):
+
+            # -----------------------Gemini-------------------------------
+            genai.configure(api_key="AIzaSyC64zw3CDFPuK1IJsyB_PyGA355XnmT2zw")
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            # gemini_context = "Query: Can you name three mammals? Answer: Dog, cat, elephant " #this is the string in our dictionary
+            # prompt = "Can you name the third animal?" #this will be the question we put in our command
+            # response = model.generate_content(gemini_context + prompt)
+            # response = "Answer: " + response.text
+            # print(response)
+            # ------------------------------------------------------------
+
+
+
             command_list = command.split() # query context_id query_string --> Query the LLM on a context ID with a query string
             context_id = int(command_list[1]) # context_id = num
             
@@ -281,15 +294,25 @@ class Node:
                 query = command.split(" ", 2)[2] # query = "What is the weather like today?"
                 # print(query) # for debugging
                 query_string = "Query: " + query # query_string = "QUERY: What is the weather like today?"
-                self.contexts[context_id] = query_string
+                self.contexts[context_id] = self.contexts[context_id] + query_string
+
+
+                gemini_context = self.contexts[context_id] # gemini_context = "Query: What is the weather like today?"
+                response = model.generate_content(gemini_context) # response = "Answer: Sunny and 75 degrees"
+                response_text = "Answer: " + response.text
+                print(response_text)
+
+
                 print(f"Node {self.node_id} queried context:", self.contexts)
 
+        else:
+            print(f"Command {command} not recognized.")
             
 
             
 
 
-
+        # OLD CODE for apply_operation()
         # op_type, *args = operation_num.split()
         # if op_type == "create":
         #     self.contexts[args[0]] = []
@@ -303,6 +326,8 @@ class Node:
         #     print(self.contexts.get(args[0], "Context not found"))
         # elif op_type == "viewall":
         #     print(self.contexts)
+
+        
 
 if __name__ == "__main__":
     import sys
