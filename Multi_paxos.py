@@ -241,27 +241,56 @@ class Node:
        
         if self.count_responses == 1:
             self.send_to_central_server(command) #send to gemini
+            self.apply_operation(command) #send to gemini
         elif self.count_responses == len(self.peers):
             self.count_responses = 0
 
     def handle_decide(self, command): # Acceptors apply the operation_num locally
         self.send_to_central_server(command) #send to gemini
+        self.apply_operation(command) #send to gemini
 
 
-    def apply_operation(self, operation_num):
-        op_type, *args = operation_num.split()
-        if op_type == "create":
-            self.contexts[args[0]] = []
-        elif op_type == "query":
-            context_id, query_string = args
-            self.contexts[context_id].append(query_string)
-        elif op_type == "choose":
-            # Handle LLM response selection logic here
-            pass
-        elif op_type == "view":
-            print(self.contexts.get(args[0], "Context not found"))
-        elif op_type == "viewall":
-            print(self.contexts)
+    def apply_operation(self, command):
+        if command.startswith("create"):
+            self.contexts[int(command.split()[1])] = "" # create context
+            print(f"Node {self.node_id} created context:", self.contexts)
+
+        elif command.startswith("query"):
+            command_list = command.split() # query context_id query_string --> Query the LLM on a context ID with a query string
+            context_id = int(command_list[1]) # context_id = num
+            
+            # After the for loop, if the contextID is not found, then print out error message
+            if context_id not in self.contexts.keys():
+                print(f"Context ID {context_id} not found.")
+            
+            else:
+                # Example input: query 1 What is the weather like today?
+                # We want query = What is the weather like today?
+                query = command.split(" ", 2)[2] # query = "What is the weather like today?"
+                # print(query) # for debugging
+                query_string = "Query: " + query # query_string = "QUERY: What is the weather like today?"
+                self.contexts[context_id] = query_string
+                print(f"Node {self.node_id} queried context:", self.contexts)
+
+            
+
+            
+
+
+
+        # op_type, *args = operation_num.split()
+        # if op_type == "create":
+        #     self.contexts[args[0]] = []
+        # elif op_type == "query":
+        #     context_id, query_string = args
+        #     self.contexts[context_id].append(query_string)
+        # elif op_type == "choose":
+        #     # Handle LLM response selection logic here
+        #     pass
+        # elif op_type == "view":
+        #     print(self.contexts.get(args[0], "Context not found"))
+        # elif op_type == "viewall":
+        #     print(self.contexts)
 
 if __name__ == "__main__":
     import sys
