@@ -301,6 +301,8 @@ class Node:
                 response = model.generate_content(gemini_context) # response = "Answer: Sunny and 75 degrees"
                 response_text = "Answer: " + response.text
                 print(response_text)
+                
+                self.contexts[context_id] = self.contexts[context_id] + " " + response_text + " "
 
 
                 print(f"Node {self.node_id} queried context:", self.contexts)
