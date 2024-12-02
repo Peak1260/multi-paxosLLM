@@ -1,11 +1,27 @@
 # STATUS: ALL NODES AGREE ON LEADERS ANSWER FROM GEMINI AS THE FINAL ANSWER TO PUT IN THEIR CONTEXT DICTIONARY
 # Needs work to change this for the user to pick the final answer or for there to be a randomized number 1-3 to pick the final answer
 # NEED TO update central server to failnode, fixnode, etc. 
+# STATUS: ALL NODES AGREE ON LEADERS ANSWER FROM GEMINI AS THE FINAL ANSWER TO PUT IN THEIR CONTEXT DICTIONARY
+# Needs work to change this for the user to pick the final answer or for there to be a randomized number 1-3 to pick the final answer
+# NEED TO update central server to failnode, fixnode, etc. 
 
 
 import socket
 import threading
 import time
+import google.generativeai as genai
+import os
+os.environ["GRPC_VERBOSITY"] = "NONE"
+
+# ---------------------------------------------------------------------------
+# genai.configure(api_key="AIzaSyC64zw3CDFPuK1IJsyB_PyGA355XnmT2zw")
+# model = genai.GenerativeModel("gemini-1.5-flash")
+# context = "Query: Can you name three mammals? Answer: Dog, cat, elephant " #this is the string in our dictionary
+# prompt = "Can you name the third animal?" #this will be the question we put in our command
+# response = model.generate_content(context + prompt)
+# response = "Answer: " + response.text
+# print(response)
+# ------------------------------------------------------------------------------
 import google.generativeai as genai
 import os
 os.environ["GRPC_VERBOSITY"] = "NONE"
@@ -32,6 +48,7 @@ class CentralServer:
         print(f"Central server started on port {self.port}")
         while True:
             conn, addr = self.server_socket.accept()
+            #print(f"Connection received from {addr}")
             #print(f"Connection received from {addr}")
             threading.Thread(target=self.handle_node_connection, args=(conn,)).start()
 
@@ -71,6 +88,7 @@ class Node:
         while True:
             conn, addr = self.node_socket.accept()
             #print (f"Node {self.node_id} connected to {addr}")
+            #print (f"Node {self.node_id} connected to {addr}")
             threading.Thread(target=self.handle_connection, args=(conn,)).start()
 
     def handle_connection(self, conn):
@@ -97,6 +115,7 @@ class Node:
 
         if message.startswith("PREPARE"): # Acceptors handle this
             time.sleep(3)
+            time.sleep(3)
             _, ballot, node_id = message.split()
             ballot = int(ballot)
             node_id = int(node_id)
@@ -104,6 +123,7 @@ class Node:
     
 
         elif message.startswith("PROMISE"): # Leader handles this
+            time.sleep(3)
             time.sleep(3)
             _, ballot, node_id, accepted_ballot_num, accepted_val_num = message.split()
             ballot = int(ballot)
@@ -116,7 +136,9 @@ class Node:
             self.handle_promise(ballot, accepted_ballot_num, accepted_val_num, node_id)
 
 
+
         elif message.startswith("LEADER"):
+            time.sleep(1)
             time.sleep(1)
             _, leader_id = message.split()
             leader_id = int(leader_id)
@@ -124,6 +146,7 @@ class Node:
 
         # ------------------------------------------------------------
         elif message.startswith("ACCEPT "):
+            time.sleep(3)
             time.sleep(3)
             command = message.split(" ", 3)[3]
             #print("command: ", command) # for debugging
@@ -137,6 +160,7 @@ class Node:
         elif message.startswith("ACCEPTED"): # Leader handles this
             # Message looks like: ACCEPTED 0 3 create 0
             time.sleep(3)
+            time.sleep(3)
             command = message.split(" ", 3)[3]
 
             # We want to parse out the node_id
@@ -145,14 +169,17 @@ class Node:
             # print("ACCEPTED node_id: ", node_id) # for debugging
 
             self.decide_operation(command, node_id)          
+            self.decide_operation(command, node_id)          
 
         elif message.startswith("DECIDE"):
+            time.sleep(3)
             time.sleep(3)
             print("DECIDE message received")
             command = message.split(" ", 1)[1]
             self.handle_decide(command)
 
         else: 
+            time.sleep(3)
             time.sleep(3)
             print("Replicating operations:", message)
             self.replicate_operation(message)
@@ -243,16 +270,22 @@ class Node:
             else:
                 print("Current leader is not set. Cannot send ACCEPTED message.")
 
+
     def decide_operation(self, command, node_id): # Leader sends out DECIDE messages
         decide_message = f"DECIDE {command}"
         # leader now increments operation number 
         self.ballot_tuple[2] += 1
 
+
         self.send_message(("localhost", 9000 + node_id), decide_message) # Send to the right node who responded to the promise
+        
+        self.count_responses += 1
         
         self.count_responses += 1
        
         if self.count_responses == 1:
+            self.send_to_central_server(command) #send to gemini
+            self.apply_operation(command) #send to gemini
             self.send_to_central_server(command) #send to gemini
             self.apply_operation(command) #send to gemini
         elif self.count_responses == len(self.peers):
@@ -309,9 +342,9 @@ class Node:
                     self.contexts[context_id] = self.contexts[context_id] + " " + response_text + " "
                     print(f"Node {self.node_id} queried context:", self.contexts)
 
-                    time.sleep(3)
-                    print("Reaching Consensus on the final answer")
-                    answer_with_context_id_command = "Answer: " + response.text.strip() + " " + str(context_id)
+                    time.sleep(4)
+                    print("Reaching Consensus on the final answer (Leader's Answer)")
+                    answer_with_context_id_command = "Answer: " + response.text + " " + str(context_id)
                     self.replicate_operation(answer_with_context_id_command)
                     
 
@@ -329,7 +362,8 @@ class Node:
                 # print("Command starts with Answer: --> context_id: ", context_id) # for debugging
 
                 self.contexts[context_id] = self.contexts[context_id] + " " + response_text + " "
-            print(f"Node {self.node_id} new context dictionary:", self.contexts)
+                # time.sleep(2)
+                print(f"Node {self.node_id} new context dictionary:", self.contexts)
 
         else:
             print(f"Command -> {command} <- not recognized.")
