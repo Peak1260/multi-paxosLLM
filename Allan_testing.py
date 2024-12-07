@@ -91,7 +91,7 @@ class Node:
         self.node_id = node_id # ID of process 1 = 1, process 2 = 2, process 3 = 3
         self.port = port # Port of process 1 = 9001, process 2 = 9002, process 3 = 9003
         self.peers = peers  # List of (host, port) tuples for other nodes
-        self.current_leader = 0 # Current leader of the network 
+        self.current_leader = None # Current leader of the network 
         self.ballot_tuple = [0,node_id,0]  # (seq_num, pid, op_num)
         self.accepted_ballot_num = 0 # Highest ballot number accepted by the acceptor
         self.accepted_val_num = 0 # previous value accepted by the acceptor
@@ -157,8 +157,6 @@ class Node:
             node_id = int(list_of_messages[2])
             accepted_ballot_num = int(list_of_messages[3])
             accepted_val_num = " ".join(list_of_messages[4:]) 
-            
-            print("debug:",accepted_val_num)
 
             self.promise_responses_dict[node_id] = [accepted_ballot_num, accepted_val_num] # mapping response from acceptor to its accepted ballot and value
 
@@ -168,7 +166,11 @@ class Node:
         elif message.startswith("LEADER"):
             time.sleep(1)
             _, leader_id = message.split()
-            leader_id = int(leader_id)
+            if leader_id == "None":
+                leader_id = None
+            else:
+                leader_id = int(leader_id)
+                
             self.handle_leader(leader_id) 
             print("got here")
 
@@ -245,7 +247,7 @@ class Node:
             if target_port == self.port: # If the node that failed is me
                 print("Node", self.node_id, "failed.")
                 if self.current_leader == self.node_id:
-                    self.current_leader = 0
+                    self.current_leader = None
                     leader_message = f"LEADER {self.current_leader}"
                     self.broadcast(leader_message)
                     
@@ -299,10 +301,15 @@ class Node:
         self.broadcast(prepare_message)
 
     def handle_prepare(self, ballot, node_id): # Acceptors reply to leader with PROMISE
-        if ballot >= self.ballot_tuple[0]:
+        if ballot > self.ballot_tuple[0]:
             self.ballot_tuple[0] = ballot  # Update the ballot tuple
             promise_message = f"PROMISE {ballot} {node_id} {self.accepted_ballot_num} {self.accepted_val_num}"
             node.send_message(("localhost", 9000 + node_id), promise_message)  # Send promise back to the leader
+        elif ballot == self.ballot_tuple[0]:
+            if node_id > self.node_id:
+                self.ballot_tuple[0] = ballot  # Update the ballot tuple
+                promise_message = f"PROMISE {ballot} {node_id} {self.accepted_ballot_num} {self.accepted_val_num}"
+                node.send_message(("localhost", 9000 + node_id), promise_message)  # Send promise back to the leader
 
     def replicate_operation(self, command): # Leader sends out Accept messages
         accept_message = f"ACCEPT {self.ballot_tuple[0]} {self.ballot_tuple[1]} {self.ballot_tuple[2]} {command}" # ACCEPT seq_num, pid, op_num, command
@@ -336,7 +343,6 @@ class Node:
                 
             if accepted_val_num == 0: # if acceptval is 0
                 counter_of_acceptvals += 1 # increment counter
-                print("debug")
             else:
                 if accepted_thing[0] > highest_accepted_ballot_num: # if acceptval is not 0, then check if the ballot number is higher than the current highest
                     highest_accepted_ballot_num = accepted_thing[0] # update the highest accepted ballot number
