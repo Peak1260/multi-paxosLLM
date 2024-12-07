@@ -16,6 +16,7 @@ class CentralServer:
         self.server_socket.listen(5)
         self.num_nodes = 3
         self.peers = peers
+        self.contexts = {}
 
     def start(self):
         print(f"Central server started on port {self.port}")
@@ -86,6 +87,30 @@ class CentralServer:
             else:
                 print("Invalid failnode command")
 
+
+        # ---------------------CENTRAL SERVER CREATING CONTEXT DICTIONARY---------------------
+        # elif command.startswith("create"):
+        #     parts = command.split() # create context_id
+        #     context_id = int(parts[1])
+        #     self.contexts[context_id] = ""
+        #     print(f"Central Server's current contexts: {self.contexts}") # for debugging
+        elif command.startswith("query"):
+            parts = command.split() # query context_id query_string
+            context_id = int(parts[1])
+            query_string = " ".join(parts[2:])
+            self.contexts[context_id] = self.contexts.get(context_id, "") + "Query: " + query_string + " "
+            print(f"Central Server's current contexts: {self.contexts}") # for debugging
+        elif command.startswith("Answer: "):
+            parts = command.split() # Answer: response context_id
+            response = " ".join(parts[0:-1])
+            context_id = int(parts[-1])
+            self.contexts[context_id] = self.contexts.get(context_id, "") + response + " "
+            print(f"Central Server's current contexts: {self.contexts}") # for debugging
+        # ---------------------CENTRAL SERVER CREATING CONTEXT DICTIONARY---------------------
+
+            
+            
+
 class Node:
     def __init__(self, node_id, port, peers):
         self.node_id = node_id # ID of process 1 = 1, process 2 = 2, process 3 = 3
@@ -137,11 +162,12 @@ class Node:
 
     def process_message(self, message):
         # Implement logic to process PREPARE, PROMISE, ACCEPT, DECIDE, etc.
-        print(f"Node {self.node_id} received: {message}")
+        # print(f"Node {self.node_id} received: {message}")
 
         
 
         if message.startswith("PREPARE"): # Acceptors handle this
+            print(f"Node {self.node_id} received: {message}")
             time.sleep(3)
             _, ballot, node_id, _ = message.split()
             ballot = int(ballot)
@@ -150,6 +176,7 @@ class Node:
     
 
         elif message.startswith("PROMISE"): # Leader handles this
+            print(f"Node {self.node_id} received: {message}")
             time.sleep(3)
             list_of_messages = message.split(" ")
   
@@ -172,10 +199,10 @@ class Node:
                 leader_id = int(leader_id)
                 
             self.handle_leader(leader_id) 
-            print("got here")
 
     
         elif message.startswith("ACCEPT "):
+            print(f"Node {self.node_id} received: {message}")
             time.sleep(3)
     
             # Split the message into parts
@@ -195,6 +222,7 @@ class Node:
 
 
         elif message.startswith("ACCEPTED"): # Leader handles this
+            print(f"Node {self.node_id} received: {message}")
             # Message looks like: ACCEPTED 1 3 0 create 0
             time.sleep(3)
             command = message.split(" ", 4)[4]
@@ -209,6 +237,7 @@ class Node:
             self.decide_operation(command, ballot, node_id, op_num)          
 
         elif message.startswith("DECIDE"):
+            print(f"Node {self.node_id} received: {message}")
             time.sleep(3)
             print("DECIDE message received")
             command = message.split(" ", 4)[4]
@@ -223,7 +252,7 @@ class Node:
             for peer in self.peers:
                 if peer[1] == src_port or peer[1] == dest_port:
                     self.peers.remove(peer)
-                    print(self.peers)
+                    print("New peers list:", self.peers)
                     print("Node", self.node_id, "removed peer:", peer)
 
         elif message.startswith("fixlink"):# message = "faillink src dest"
@@ -235,10 +264,10 @@ class Node:
             # append the peer that isn't myself
             if src_port != self.port:
                 self.peers.append(("localhost", src_port))
-                print("new peers list: ", self.peers)
+                print("New peers list:", self.peers)
             else:
                 self.peers.append(("localhost", dest_port))
-                print("new peers list: ", self.peers)
+                print("New peers list:", self.peers)
                 
         elif message.startswith("failnode"): # message = "failnode node_id"
             command = message.split() # failnode node_id
@@ -252,7 +281,7 @@ class Node:
                     self.broadcast(leader_message)
                     
                 self.peers = []
-                print("new peers list is empty: ", self.peers)
+                print("New peers list is empty:", self.peers)
                 
                 os._exit(0)
 
@@ -260,10 +289,11 @@ class Node:
                 for peer in self.peers:
                     if peer[1] == target_port:
                         self.peers.remove(peer)
-                        print("new peers list: ", self.peers)
-                        break         
+                        print("New peers list: ", self.peers)
+                        break
             
         else: 
+            print(f"Node {self.node_id} received: {message}")
             time.sleep(3)
             print("Replicating operations:", message)
             self.replicate_operation(message)
@@ -276,7 +306,10 @@ class Node:
 
 
     def send_message(self, peer, message):
-        print(f"Node {self.node_id} sending to {peer}: {message}")
+
+        if not (message.startswith("LEADER")):
+            print(f"Node {self.node_id} sending to {peer}: {message}")
+    
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect(peer)
         s.sendall(message.encode())
@@ -403,7 +436,7 @@ class Node:
         self.apply_operation(command) #send to gemini
 
     def handle_decide(self, command): # Acceptors apply the operation_num locally
-        self.send_to_central_server(command) #send to gemini
+        # self.send_to_central_server(command) #send to gemini # ACCEPTOR NODES DO NOT SEND TO CENTRAL SERVER
         self.apply_operation(command) #send to gemini
 
     def apply_operation(self, command):
@@ -473,15 +506,8 @@ class Node:
                 # print("Command starts with Answer: --> context_id: ", context_id) # for debugging
 
                 self.contexts[context_id] = self.contexts[context_id] + " " + response_text + " "
+            
             print(f"Node {self.node_id} new context dictionary:", self.contexts)
-
-        elif command.startswith("viewall"):
-            print(self.contexts)
-        
-        elif command.startswith("view "): # view <context_id>
-            context_id = int(command.split()[1])
-            print(self.contexts[context_id])
-            # print(f"Node {self.node_id} viewed context ID {context_id}: {self.contexts.get(context_id, 'Context not found')}")
         
         else:
             print(f"Command -> {command} <- not recognized.")   
@@ -519,7 +545,14 @@ if __name__ == "__main__":
                     node_running = False
                     running_flag = False
                     break
-                if node.current_leader == node_id:
+
+                elif command.startswith("view "):
+                    context_id = int(command.split()[1])
+                    print(node.contexts[context_id])
+                elif command.startswith("viewall"):
+                    print(node.contexts)
+
+                elif node.current_leader == node_id:
                     print("I am Leader: Replicating operation_num...")
                     node.replicate_operation(command)
                     
