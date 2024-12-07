@@ -1,3 +1,26 @@
+# FOR LATER Dec 7
+
+'''
+CHOOSE
+Implement choose <context ID> <response number> where response number is the node_id of the node that has the response you want to choose
+We will create a candidate dictionary that only the leaders stores that contains all the answers of the nodes 
+The leader will print out these options
+Each node will not yet add the asnwer to the context dicitonary until the user chooses an answer on the leader node who will then
+broadcast something like "ANSWER: ____" and then nodes can add this to their context dictionary
+
+
+RECOVERY
+Need to create a flag for recovery purposes where if a node has just been failed, dont add the next value to your context dictionary
+Remember  this,
+Ansewer: Iphone Answer: Iphone
+
+When a node comes back, ask the leader if they are behind on operaton number and if they are, set their operation number to the leader's operation number
+and ask the central server to send them the dicitonary we stored in central server to a node (it's the most caught up)
+
+'''
+
+
+
 import socket
 import threading
 import time
