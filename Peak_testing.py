@@ -91,7 +91,7 @@ class Node:
         self.node_id = node_id # ID of process 1 = 1, process 2 = 2, process 3 = 3
         self.port = port # Port of process 1 = 9001, process 2 = 9002, process 3 = 9003
         self.peers = peers  # List of (host, port) tuples for other nodes
-        self.current_leader = None # Current leader of the network for right now is hardcoded to 1
+        self.current_leader = 0 # Current leader of the network 
         self.ballot_tuple = [0,node_id,0]  # (seq_num, pid, op_num)
         self.accepted_ballot_num = 0 # Highest ballot number accepted by the acceptor
         self.accepted_val_num = 0 # previous value accepted by the acceptor
@@ -151,11 +151,12 @@ class Node:
 
         elif message.startswith("PROMISE"): # Leader handles this
             time.sleep(3)
-            _, ballot, node_id, accepted_ballot_num, accepted_val_num = message.split()
-            ballot = int(ballot)
-            node_id = int(node_id)
-            accepted_ballot_num = int(accepted_ballot_num)
-            accepted_val_num = int(accepted_val_num)
+            list_of_messages = message.split(" ")
+  
+            ballot = int(list_of_messages[1])
+            node_id = int(list_of_messages[2])
+            accepted_ballot_num = int(list_of_messages[3])
+            accepted_val_num = " ".join(list_of_messages[4:]) 
 
             self.promise_responses_dict[node_id] = [accepted_ballot_num, accepted_val_num] # mapping response from acceptor to its accepted ballot and value
 
@@ -167,6 +168,7 @@ class Node:
             _, leader_id = message.split()
             leader_id = int(leader_id)
             self.handle_leader(leader_id) 
+            print("got here")
 
     
         elif message.startswith("ACCEPT "):
@@ -240,12 +242,13 @@ class Node:
 
             if target_port == self.port: # If the node that failed is me
                 print("Node", self.node_id, "failed.")
+                if self.current_leader == self.node_id:
+                    self.current_leader = 0
+                    leader_message = f"LEADER {self.current_leader}"
+                    self.broadcast(leader_message)
+                    
                 self.peers = []
                 print("new peers list is empty: ", self.peers)
-
-                if self.current_leader == self.node_id:
-                    self.current_leader = None
-                    print("There is now no current leader")
                 
                 os._exit(0)
 
@@ -354,6 +357,7 @@ class Node:
         #print(f"Node {self.node_id} recognizes Node {self.current_leader} as the leader.")
 
     def handle_accept(self, ballot, node_id, operation_num, command): # Acceptors Reply to leader with Accepted
+        self.reset_broadcast_decide()
         self.reset_broadcast_promise()
         if ballot >= self.accepted_ballot_num:
             self.queue.append(operation_num)
@@ -376,7 +380,6 @@ class Node:
             # Mark as broadcasted
         self.broadcast_decide = True
         
-        self.ballot_tuple[2] += 1
         decide_message = f"DECIDE {ballot} {node_id} {op_num} {command}"
 
         for peer in self.peers:
@@ -413,6 +416,7 @@ class Node:
             else:
                 # Example input: query 1 What is the weather like today?
                 # We want query = What is the weather like today?
+                self.ballot_tuple[2] += 1
                 query = command.split(" ", 2)[2] # query = "What is the weather like today?"
                 # print(query) # for debugging
                 query_string = "Query: " + query # query_string = "QUERY: What is the weather like today?"
@@ -430,13 +434,14 @@ class Node:
                     print(f"Node {self.node_id} queried context:", self.contexts)
 
                     time.sleep(3)
-                    print("Reaching Consensus on the final answer")
+                    print("Reaching consensus on the final answer")
                     answer_with_context_id_command = "Answer: " + response.text.strip() + " " + str(context_id)
 
                     self.replicate_operation(answer_with_context_id_command)
                     
 
         elif command.startswith("Answer: "):
+            self.ballot_tuple[2] += 1
             # If we are the leader, we can skip this step because we already added the response to the context
             # If we are NOT the leader, we need to add the response to the context
             if self.node_id != self.current_leader:
