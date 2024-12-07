@@ -91,27 +91,20 @@ class CentralServer:
                 print("Fix link between", src_port, "and", dest_port)
             else:
                 print("Invalid fixlink command")
+                
+        elif command.startswith("failnode"):
+            parts = command.split()
+            cmd = parts[0].lower()
+            target_port = int(parts[1]) + 9000
 
-
-        # elif cmd == "failnode" and len(parts) == 2:
-        #     node = int(parts[1])
-        #     success = self.failNode(node)
-        #     print("Fail node {node}")
-        #     if success:
-        #         print("Success")
-        #     else: 
-        #         print("Failed")
-
-
-        # elif cmd == "restartnode" and len(parts) == 2:
-        #     node = int(parts[1])
-        #     success = self.restartNode(node)
-        #     print("Restart node {node}")
-        #     if success:
-        #         print("Success")
-        #     else: 
-        #         print("Failed")
-
+            if cmd == "failnode" and len(parts) == 2:
+                for peer in peers:
+                    if peer[1] == target_port:
+                        self.send_message(peer, command) 
+                        print("Sent", command,  "to node:", peer)
+                print("Fail node", target_port)
+            else:
+                print("Invalid failnode command")
     # -----------------------------TODO----------------------------------------------
     # def failLink(self, src, dest):
     #     """Simulate link failure between src and dest nodes."""
@@ -290,6 +283,11 @@ class Node:
             else:
                 self.peers.append(("localhost", dest_port))
                 print("new peers list: ", self.peers)
+                
+        elif message.startswith("failnode"):
+            command = message.split()
+            target_port = int(command[1]) + 9000
+
 
 
 

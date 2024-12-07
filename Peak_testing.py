@@ -144,7 +144,7 @@ class Node:
         self.contexts = {}
         self.promise_responses_dict = {} # Dictionary to store the promises received from the acceptors
         self.myVal = ""
-
+    
         # Initialize server socket
         self.node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.node_socket.bind(('localhost', self.port))
