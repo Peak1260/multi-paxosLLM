@@ -31,7 +31,7 @@ import sys
 # ----------------------------GEMINI-----------------------------------------------
 
 class CentralServer:
-    def __init__(self, peers, port=9000, num_nodes=3):
+    def __init__(self, port=9000, num_nodes=3):
         self.node_id = 0
         self.port = port
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -39,7 +39,6 @@ class CentralServer:
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_socket.listen(5)
         self.num_nodes = num_nodes
-        self.peers = peers
 
     def start(self):
         print(f"Central server started on port {self.port}")
@@ -474,7 +473,7 @@ if __name__ == "__main__":
 
     while running_flag:
         if node_id == 0: 
-            server = CentralServer(peers)
+            server = CentralServer()
             threading.Thread(target=server.start).start() 
             while running_flag_2:
                 command = input()
