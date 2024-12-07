@@ -16,7 +16,11 @@ import google.generativeai as genai
 import os
 os.environ["GRPC_VERBOSITY"] = "NONE"
 
-# ---------------------------------------------------------------------------
+import sys
+
+
+
+# ----------------------------GEMINI-----------------------------------------------
 # genai.configure(api_key="AIzaSyC64zw3CDFPuK1IJsyB_PyGA355XnmT2zw")
 # model = genai.GenerativeModel("gemini-1.5-flash")
 # context = "Query: Can you name three mammals? Answer: Dog, cat, elephant " #this is the string in our dictionary
@@ -24,20 +28,18 @@ os.environ["GRPC_VERBOSITY"] = "NONE"
 # response = model.generate_content(context + prompt)
 # response = "Answer: " + response.text
 # print(response)
-# ------------------------------------------------------------------------------
+# ----------------------------GEMINI-----------------------------------------------
 
 class CentralServer:
-    def __init__(self, port=9000, num_nodes=3):
+    def __init__(self, peers, port=9000, num_nodes=3):
         self.node_id = 0
         self.port = port
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.bind(('localhost', self.port))
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_socket.listen(5)
-
         self.num_nodes = num_nodes
-        self.links = {(i, j): True for i in range(num_nodes) for j in range(num_nodes) if i != j}  # All links are initially active
-        self.active_nodes = set(range(num_nodes))  # All nodes are initially active
+        self.peers = peers
 
     def start(self):
         print(f"Central server started on port {self.port}")
@@ -53,6 +55,11 @@ class CentralServer:
                 self.process_command(data)
         finally:
             conn.close()
+
+    def broadcast(self, message):
+        print(f"Node {self.node_id} broadcasting: {message}")
+        for peer in self.peers:
+            self.send_message(peer, message)
 
     def send_message(self, peer, message):
         print(f"Node {self.node_id} sending to {peer}: {message}")
@@ -98,52 +105,16 @@ class CentralServer:
             target_port = int(parts[1]) + 9000
 
             if cmd == "failnode" and len(parts) == 2:
-                for peer in peers:
-                    if peer[1] == target_port:
-                        self.send_message(peer, command) 
-                        print("Sent", command,  "to node:", peer)
-                print("Fail node", target_port)
+
+                self.broadcast(command)
+
+                # for peer in peers:
+                #     if peer[1] == target_port:
+                #         self.send_message(peer, command) 
+                #         print("Sent", command,  "to node:", peer)
+                print("We just failed node with port: ", target_port)
             else:
                 print("Invalid failnode command")
-    # -----------------------------TODO----------------------------------------------
-    # def failLink(self, src, dest):
-    #     """Simulate link failure between src and dest nodes."""
-    #     if src >= self.num_nodes or dest >= self.num_nodes or src == dest:
-    #         return False
-            
-    #     self.links[(src, dest)] = False
-    #     self.links[(dest, src)] = False
-    #     return True
-
-    # def fixLink(self, src, dest):
-    #     """Fix failed link between src and dest nodes."""
-    #     if src >= self.num_nodes or dest >= self.num_nodes or src == dest:
-    #         return False
-            
-    #     self.links[(src, dest)] = True
-    #     self.links[(dest, src)] = True
-    #     return True
-
-    # def failNode(self, node):
-    #     """Simulate node failure."""
-    #     if node >= self.num_nodes or node not in self.active_nodes:
-    #         return False
-            
-    #     self.active_nodes.remove(node)
-    #     return True
-
-    # def restartNode(self, node):
-    #     """Restart a failed node."""
-    #     if node >= self.num_nodes or node in self.active_nodes:
-    #         return False
-            
-    #     self.active_nodes.add(node)
-    #     return True
-
-    # def can_communicate(self, src, dest):
-    #     """Check if src can communicate with dest."""
-    #     return self.links.get((src, dest), False) and src in self.active_nodes and dest in self.active_nodes
-    
     # ---------------------------------------------------------------------------
 
 class Node:
@@ -165,11 +136,11 @@ class Node:
         self.node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.node_socket.bind(('localhost', self.port))
         self.node_socket.listen(5)
-        
+     
     def start(self):
         print(f"Node {self.node_id} started on port {self.port}")
         threading.Thread(target=self.listen).start()
-
+        
     def listen(self):
         while True:
             conn, addr = self.node_socket.accept()
@@ -198,8 +169,6 @@ class Node:
         # Implement logic to process PREPARE, PROMISE, ACCEPT, DECIDE, etc.
         print(f"Node {self.node_id} received: {message}")
 
-        
-
         if message.startswith("PREPARE"): # Acceptors handle this
             time.sleep(3)
             _, ballot, node_id = message.split()
@@ -207,7 +176,6 @@ class Node:
             node_id = int(node_id)
             self.handle_prepare(ballot, node_id)
     
-
         elif message.startswith("PROMISE"): # Leader handles this
             time.sleep(3)
             _, ballot, node_id, accepted_ballot_num, accepted_val_num = message.split()
@@ -220,14 +188,12 @@ class Node:
 
             self.handle_promise(ballot, accepted_ballot_num, accepted_val_num, node_id)
 
-
         elif message.startswith("LEADER"):
             time.sleep(1)
             _, leader_id = message.split()
             leader_id = int(leader_id)
             self.handle_leader(leader_id) 
 
-    
         elif message.startswith("ACCEPT "):
             time.sleep(3)
             command = message.split(" ", 3)[3]
@@ -238,7 +204,6 @@ class Node:
             operation_num = int(list_of_messages[2])
             self.handle_accept(ballot, operation_num, command) # acceptors handle this
 
-
         elif message.startswith("ACCEPTED"): # Leader handles this
             # Message looks like: ACCEPTED 0 3 create 0
             time.sleep(3)
@@ -248,7 +213,6 @@ class Node:
             list_of_messages = message.split()
             node_id = int(list_of_messages[2])
             # print("ACCEPTED node_id: ", node_id) # for debugging
-
             self.decide_operation(command, node_id)          
 
         elif message.startswith("DECIDE"):
@@ -271,7 +235,6 @@ class Node:
 
         elif message.startswith("fixlink"):# message = "faillink src dest"
             # print("Node", self.node_id, "received message:", message) # for debugging
-            # 
             command = message.split()
             src_port = int(command[1]) + 9000
             dest_port = int(command[2]) + 9000
@@ -284,20 +247,30 @@ class Node:
                 self.peers.append(("localhost", dest_port))
                 print("new peers list: ", self.peers)
                 
-        elif message.startswith("failnode"):
-            command = message.split()
+        elif message.startswith("failnode"): # message = "failnode node_id"
+            command = message.split() # failnode node_id
             target_port = int(command[1]) + 9000
 
+            if target_port == self.port: # If the node that failed is me
+                print("Node", self.node_id, "failed.")
+                self.peers = []
+                print("new peers list is empty: ", self.peers)
 
+                if self.current_leader == self.node_id:
+                    self.current_leader = None
+                    print("There is now NO Current Leader")
+                
+                os._exit(0)
+                # sys.exit(0)
 
+            else: # If the node that failed is not me
+                for peer in self.peers:
+                    if peer[1] == target_port:
+                        self.peers.remove(peer)
+                        print("new peers list: ", self.peers)
+                        break
 
-        
-
-
-
-            
-            
-        else: 
+        else: # this is the case when the message is a command
             time.sleep(3)
             print("Replicating operations:", message)
             self.replicate_operation(message)
@@ -397,13 +370,10 @@ class Node:
         self.count_responses += 1
 
         if len(self.peers) == 1: # a link has been failed
-            print("test")
+            # print("test")
             self.count_responses = 0
             self.send_to_central_server(command)
             self.apply_operation(command)
-
-
-
        
         if self.count_responses == 1:
             self.send_to_central_server(command) #send to gemini
@@ -427,14 +397,7 @@ class Node:
             # -----------------------Gemini-------------------------------
             genai.configure(api_key="AIzaSyC64zw3CDFPuK1IJsyB_PyGA355XnmT2zw")
             model = genai.GenerativeModel("gemini-1.5-flash")
-            # gemini_context = "Query: Can you name three mammals? Answer: Dog, cat, elephant " #this is the string in our dictionary
-            # prompt = "Can you name the third animal?" #this will be the question we put in our command
-            # response = model.generate_content(gemini_context + prompt)
-            # response = "Answer: " + response.text
-            # print(response)
             # -----------------------Gemini---------------------------------
-
-
 
             command_list = command.split() # query context_id query_string --> Query the LLM on a context ID with a query string
             context_id = int(command_list[1]) # context_id = num
@@ -493,53 +456,41 @@ class Node:
             print(self.contexts[context_id])
             # print(f"Node {self.node_id} viewed context ID {context_id}: {self.contexts.get(context_id, 'Context not found')}")
         
-        
-
         else:
             print(f"Command -> {command} <- not recognized.")
-            
 
-            
-
-
-        # OLD CODE for apply_operation()
-        # op_type, *args = operation_num.split()
-        # if op_type == "create":
-        #     self.contexts[args[0]] = []
-        # elif op_type == "query":
-        #     context_id, query_string = args
-        #     self.contexts[context_id].append(query_string)
-        # elif op_type == "choose":
-        #     # Handle LLM response selection logic here
-        #     pass
-        # elif op_type == "view":
-        #     print(self.contexts.get(args[0], "Context not found"))
-        # elif op_type == "viewall":
-        #     print(self.contexts)
+# ----------------------------------------------------------------------------------------------------------------------------------------
 
         
 
 if __name__ == "__main__":
-    import sys
     node_id = int(sys.argv[1])
     port = 9000 + node_id
     peers = [("localhost", 9000 + i + 1) for i in range(3) if (i+1) != node_id]
     print(f"Node {node_id} peers: {peers}") # for debugging
 
-    if node_id == 0: 
-        server = CentralServer()
-        threading.Thread(target=server.start).start()
+    running_flag = True
+    running_flag_2 = True
+
+    while running_flag:
+        if node_id == 0: 
+            server = CentralServer(peers)
+            threading.Thread(target=server.start).start() 
+            while running_flag_2:
+                command = input()
+                if command.lower() == "exit":
+                    running_flag_2 = False 
+                    running_flag = False
+                server.process_command(command)
+        else:
+            node = Node(node_id, port, peers)
+            threading.Thread(target=node.start).start()
         
-        while True:
             command = input()
-            server.process_command(command)
-    else:
-        node = Node(node_id, port, peers)
-        threading.Thread(target=node.start).start()
-        
-        while True:
-            command = input()
-            if node.current_leader == node_id:
+            if command.lower() == "exit":
+                running_flag = False
+
+            elif node.current_leader == node_id:
                 print("I am Leader: Replicating operation_num...")
                 node.replicate_operation(command)
                 
@@ -550,3 +501,7 @@ if __name__ == "__main__":
             else:
                 print("No leader. Need to start election...")
                 node.start_election(command)
+        
+    os._exit(0)
+    # sys.exit(0)
+
