@@ -157,10 +157,12 @@ class Node:
             node_id = int(list_of_messages[2])
             accepted_ballot_num = int(list_of_messages[3])
             accepted_val_num = " ".join(list_of_messages[4:]) 
+            
+            print("debug:",accepted_val_num)
 
             self.promise_responses_dict[node_id] = [accepted_ballot_num, accepted_val_num] # mapping response from acceptor to its accepted ballot and value
 
-            self.handle_promise(ballot, node_id)
+            self.handle_promise(ballot, node_id, accepted_val_num)
 
 
         elif message.startswith("LEADER"):
@@ -307,7 +309,7 @@ class Node:
         self.broadcast(accept_message)
 
 
-    def handle_promise(self, ballot, node_id): # Leader handles all the promises
+    def handle_promise(self, ballot, node_id, accepted_val_num): # Leader handles all the promises
         if hasattr(self, "broadcast_promise") and self.broadcast_promise:
             return  # Exit if already broadcasted
 
@@ -327,9 +329,14 @@ class Node:
         counter_of_acceptvals = 0
         highest_accepted_ballot_num = 0
         for accepted_thing in self.promise_responses_dict.values(): # accepted_thing = [accepted_ballot_num, accepted_val_num]
-            if accepted_thing[1] == 0: # if acceptval is 0
+            if isinstance(accepted_thing[1], str) and accepted_thing[1].isdigit():
+                accepted_val_num = int(accepted_thing[1])  # Convert to int if it's a string representation of a number
+            else:
+                accepted_val_num = accepted_thing[1]
+                
+            if accepted_val_num == 0: # if acceptval is 0
                 counter_of_acceptvals += 1 # increment counter
-
+                print("debug")
             else:
                 if accepted_thing[0] > highest_accepted_ballot_num: # if acceptval is not 0, then check if the ballot number is higher than the current highest
                     highest_accepted_ballot_num = accepted_thing[0] # update the highest accepted ballot number
@@ -417,6 +424,9 @@ class Node:
                 # Example input: query 1 What is the weather like today?
                 # We want query = What is the weather like today?
                 self.ballot_tuple[2] += 1
+                print("Current operation number:", self.ballot_tuple[2])
+                
+                
                 query = command.split(" ", 2)[2] # query = "What is the weather like today?"
                 # print(query) # for debugging
                 query_string = "Query: " + query # query_string = "QUERY: What is the weather like today?"
@@ -442,6 +452,8 @@ class Node:
 
         elif command.startswith("Answer: "):
             self.ballot_tuple[2] += 1
+            
+            print("Current operation number:", self.ballot_tuple[2])
             # If we are the leader, we can skip this step because we already added the response to the context
             # If we are NOT the leader, we need to add the response to the context
             if self.node_id != self.current_leader:
@@ -489,6 +501,7 @@ if __name__ == "__main__":
                 if command.lower() == "exit":
                     server_running = False
                     running_flag = False
+                    break
                 server.process_command(command)
         else:
             node = Node(node_id, port, peers)
@@ -499,6 +512,7 @@ if __name__ == "__main__":
                 if command.lower() == "exit":
                     node_running = False
                     running_flag = False
+                    break
                 if node.current_leader == node_id:
                     print("I am Leader: Replicating operation_num...")
                     node.replicate_operation(command)
