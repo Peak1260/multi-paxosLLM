@@ -117,18 +117,29 @@ class CentralServer:
         #     context_id = int(parts[1])
         #     self.contexts[context_id] = ""
         #     print(f"Central Server's current contexts: {self.contexts}") # for debugging
+
         elif command.startswith("query"):
             parts = command.split() # query context_id query_string
             context_id = int(parts[1])
             query_string = " ".join(parts[2:])
             self.contexts[context_id] = self.contexts.get(context_id, "") + "Query: " + query_string + " "
             print(f"Central Server's current contexts: {self.contexts}") # for debugging
-        elif command.startswith("Answer: "):
+        elif command.startswith("Answer: "): # Answer: response context_id
             parts = command.split() # Answer: response context_id
             response = " ".join(parts[0:-1])
             context_id = int(parts[-1])
             self.contexts[context_id] = self.contexts.get(context_id, "") + response + " "
             print(f"Central Server's current contexts: {self.contexts}") # for debugging
+
+        # elif command.startswith("CONTEXT"): # "CONTEXT" + " " + str(context_id) + " " + self.contexts[context_id] + " Answer: " + answer + " "
+        #     parts = command.split()
+        #     context_id = int(parts[1])
+        #     answer = parts[3:]
+        #     answer = " ".join(answer)
+        #     self.contexts[context_id] += answer
+        #     print(f"Central Server's current contexts: {self.contexts}")
+            
+
         # ---------------------CENTRAL SERVER CREATING CONTEXT DICTIONARY---------------------
 
             
@@ -269,12 +280,28 @@ class Node:
             self.handle_decide(command)
         
         elif message.startswith("Candidate: "): # Leader handles this
+            self.count_responses += 1
+
             parts = message.split() # Candidate: response context_id node_id
             response = " ".join(parts[1:-2]) # response = "response"
             context_id = int(parts[-2]) # context_id = num
             node_id = int(parts[-1]) # node_id = num
             self.candidate_answers[node_id] = response + " " + str(context_id)
-            print(self.candidate_answers) # For debugging
+
+            # time.sleep(1)
+            if self.count_responses == len(self.peers): # If we have received all responses from the nodes
+                self.count_responses = 0 # Reset the count
+                # print("Candidate answers:", self.candidate_answers) # For debugging
+                for candidate in self.candidate_answers.keys():
+                    # self.candidate_answers[candidate] would be response + " " + context_id but I just want the response
+                    # even if response is longer than one word
+                    answer = self.candidate_answers[candidate].split()[0:-1] # answer = response
+                    answer = " ".join(answer)
+                    
+
+                    print("Context", context_id, "- Candidate", candidate, ":", answer)
+                    print()
+
 
 
         elif message.startswith("faillink"):# message = "faillink src dest"
@@ -325,10 +352,11 @@ class Node:
                         self.peers.remove(peer)
                         print("New peers list: ", self.peers)
                         break
+        
             
         else: 
             print(f"Node {self.node_id} received: {message}")
-            time.sleep(3)
+            # time.sleep(3)
             print("Replicating operations:", message)
             self.replicate_operation(message)
 
@@ -379,6 +407,7 @@ class Node:
                 node.send_message(("localhost", 9000 + node_id), promise_message)  # Send promise back to the leader
 
     def replicate_operation(self, command): # Leader sends out Accept messages
+        time.sleep(3)
         accept_message = f"ACCEPT {self.ballot_tuple[0]} {self.ballot_tuple[1]} {self.ballot_tuple[2]} {command}" # ACCEPT seq_num, pid, op_num, command
         self.broadcast(accept_message)
 
@@ -517,6 +546,7 @@ class Node:
                 else: # I am the leader
                     # add my response to candidate_answers dictionary
                     self.candidate_answers[self.node_id] = response.text.strip() + " " + str(context_id) # 3: "California 0"
+                    # print("self.candidate_answers is:", self.candidate_answers)
 
 
 
@@ -541,32 +571,81 @@ class Node:
 
 
         elif command.startswith("choose"): # choose <context_ID> <node_ID>
-            print("Choose doesn't work yet")
+
+            if self.node_id == self.current_leader:
+                # Only the leader does this
+
+                parts = command.split() # choose context_ID node_ID
+                context_id = int(parts[1]) # context_id = num
+                node_id = int(parts[2]) # node_id = num
+
+                # add this to its context dictionary
+                #  self.candidate_answers[node_id] would be response + " " + context_id but I just want the response
+                # print("self.candidate_answers[node_id]:", self.candidate_answers[node_id])
+                answer = self.candidate_answers[node_id] # answer = response
+                # answer =  " ".join(answer)
+                # answer = "Answer: " + answer
+                # self.replicate_operation(answer)
+                # print("answer:", answer)
+                
+
+                # Send this update to the central server
+                agree_on_answer = "Answer: " + answer
+
+                answer_without_context_id = agree_on_answer.split()[0:-1] # answer_without_context_id = response
+                answer = " ".join(answer_without_context_id)
+                self.contexts[context_id] += " " + answer + " "
+                # print(f"Node {self.node_id} queried context:", self.contexts)
+
+                self.replicate_operation(agree_on_answer)
+                
+
+                
+            
+
+
+            # BROADCAST TO ALL NODES THE FINAL ANSWER FOR THEM TO UPDATE THEIR CONTEXT DICTIONARY
+
+
+
+
+        elif command.startswith("Answer: "): # Answer: response context_id
+            self.ballot_tuple[2] += 1
+            print("Current operation number:", self.ballot_tuple[2])
+            # print("command:",command)
+
+            if self.node_id != self.current_leader:
+                parts = command.split()
+                context_id = int(parts[-1])
+                response = " ".join(parts[0:-1])
+                self.contexts[context_id] += " " + response + " "
+                print(f"Node {self.node_id} new context dictionary:", self.contexts)
+
                     
 
 
 
 
 
-        elif command.startswith("Answer: "):
-            self.ballot_tuple[2] += 1
+        # elif command.startswith("Answer: "):
+        #     self.ballot_tuple[2] += 1
             
-            print("Current operation number:", self.ballot_tuple[2])
-            # If we are the leader, we can skip this step because we already added the response to the context
-            # If we are NOT the leader, we need to add the response to the context
-            if self.node_id != self.current_leader:
-                # I want to separate the string into two parts: Answer: Sunny and 75 degrees 1 where 1 is the context ID
-                command_list = command.split() # Answer: Sunny and 75 degrees 1
-                # I want response text to be "Answer: Sunny and 75 degrees"
-                response_text = " ".join(command_list[0:-1]) # response_text = "Answer: Sunny and 75 degrees"
-                # print("Command starts with Answer: --> response_text: ", response_text) # for debugging
-                # I want context_id to be 1
-                context_id = int(command_list[-1]) # context_id = 1
-                # print("Command starts with Answer: --> context_id: ", context_id) # for debugging
+        #     print("Current operation number:", self.ballot_tuple[2])
+        #     # If we are the leader, we can skip this step because we already added the response to the context
+        #     # If we are NOT the leader, we need to add the response to the context
+        #     if self.node_id != self.current_leader:
+        #         # I want to separate the string into two parts: Answer: Sunny and 75 degrees 1 where 1 is the context ID
+        #         command_list = command.split() # Answer: Sunny and 75 degrees 1
+        #         # I want response text to be "Answer: Sunny and 75 degrees"
+        #         response_text = " ".join(command_list[0:-1]) # response_text = "Answer: Sunny and 75 degrees"
+        #         # print("Command starts with Answer: --> response_text: ", response_text) # for debugging
+        #         # I want context_id to be 1
+        #         context_id = int(command_list[-1]) # context_id = 1
+        #         # print("Command starts with Answer: --> context_id: ", context_id) # for debugging
 
-                self.contexts[context_id] = self.contexts[context_id] + " " + response_text + " "
+        #         self.contexts[context_id] = self.contexts[context_id] + " " + response_text + " "
             
-            print(f"Node {self.node_id} new context dictionary:", self.contexts)
+        #     print(f"Node {self.node_id} new context dictionary:", self.contexts)
         
         else:
             print(f"Command -> {command} <- not recognized.")   
