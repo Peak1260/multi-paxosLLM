@@ -17,10 +17,11 @@ class CentralServer:
         self.num_nodes = 3
         self.peers = peers
         self.active_connections = {}
+        #{9001: 1733696872.7281015, 9002: 1733696872.7281015, 9003: 1733696872.7281015}
         self.connection_lock = threading.Lock()
-        self.timeout_interval = 6  # 5 seconds timeout
-        self.heartbeat_interval = 1  # 2 seconds between heartbeats
+        self.timeout_interval = 6  # 6 seconds timeout
         self.failed_nodes = set()  # Track nodes that have failed
+        self.timed_out_nodes = set()  # Track nodes already timed out
 
     def start(self):
         print(f"Central server started on port {self.port}")
@@ -42,75 +43,69 @@ class CentralServer:
                 if not data:
                     break
                 
-                print(f"Central server received value: {data}")
-                
-                with self.connection_lock:
-                    # Update last heartbeat time for this connection
-                    self.active_connections[addr[1]] = time.time()
+                if data != "heartbeat":
+                    print(f"Central server received value: {data}")
+
+                if data == "heartbeat":
+                    with self.connection_lock:
+                        # Update last heartbeat time for this connection
+                        for peer in self.peers:
+                            self.active_connections[peer[1]] = time.time()
+                        print(self.active_connections)
                     
-                    # Check if this is a previously failed node reconnecting
-                    node_id = addr[1] - 9000
-                    if node_id in self.failed_nodes:
-                        self.handle_node_reconnection(node_id)
-                
-                self.process_command(data)
-        except Exception as e:
-            print(f"Connection error with {addr}: {e}")
+                else:
+                    self.process_command(data)
+
+        except Exception:
+            print(f"Connection error with {addr}")
+
         finally:
-            with self.connection_lock:
-                if addr[1] in self.active_connections:
-                    del self.active_connections[addr[1]]
             conn.close()
 
     def monitor_node_connections(self):
         while True:
             current_time = time.time()
-            failed_nodes = []
             
             with self.connection_lock:
-                # Check for timeout on active connections
+                # Check active connections for timeouts
                 for port, last_heartbeat in list(self.active_connections.items()):
                     if current_time - last_heartbeat > self.timeout_interval:
-                        # Identify which node failed based on port
+                        print(f"Node on port {port} timed out.")
                         failed_node = port - 9000
-                        failed_nodes.append(failed_node)
-                        
-                        # Remove from active connections
                         del self.active_connections[port]
+                        self.failed_nodes.add(failed_node)
+                        self.handle_node_failure(failed_node)
+                
+                # Check for recovery of failed nodes
+                for failed_node in list(self.failed_nodes):
+                    failed_port = failed_node + 9000
+                    if failed_port in self.active_connections:
+                        continue  # Skip if already active
+
+                    # Try to detect recovery (e.g., check if a heartbeat is received)
+                    if failed_port in self.timed_out_nodes:
+                        # If recovered, move back to active connections
+                        print(f"Node {failed_node} recovered.")
+                        self.active_connections[failed_port] = current_time
+                        self.failed_nodes.remove(failed_node)
+
+            time.sleep(1)
             
-            # Broadcast node failures
-            for node in failed_nodes:
-                self.handle_node_failure(node)
-            
-            # Wait before next check
-            time.sleep(self.heartbeat_interval)
 
     def handle_node_failure(self, failed_node):
-        # Add to failed nodes set
-        self.failed_nodes.add(failed_node)
-        
-        # Remove failed node from peers
-        self.peers = [peer for peer in self.peers if peer[1] != 9000 + failed_node]
-        
+        # Add to timed out nodes to prevent repeated timeouts
+        with self.connection_lock:
+            if failed_node in self.timed_out_nodes:
+                return
+            self.timed_out_nodes.add(failed_node)
         # Broadcast timeout message to all remaining nodes
         timeout_message = f"TIMEOUT {failed_node}"
-        self.broadcast(timeout_message)
+        failed_port = failed_node + 9000
+        for peer in self.peers:
+            if peer[1] != failed_port:
+                self.send_message(peer, timeout_message)
         
-        print(f"Node {failed_node} timed out and removed from peers")
-
-    def handle_node_reconnection(self, reconnected_node):
-        # Remove from failed nodes
-        self.failed_nodes.discard(reconnected_node)
-        
-        # Add back to peers if not already present
-        reconnected_port = 9000 + reconnected_node
-        if not any(peer[1] == reconnected_port for peer in self.peers):
-            self.peers.append(('localhost', reconnected_port))
-        
-        # Broadcast node reconnection to other nodes
-        reconnect_message = f"RECONNECT {reconnected_node}"
-        self.broadcast(reconnect_message)
-        print(f"Node {reconnected_node} has reconnected")
+        print(f"Node {failed_node} timed out")
 
     def send_message(self, peer, message):
         try:
@@ -124,11 +119,9 @@ class CentralServer:
                 self.active_connections[peer[1]] = time.time()
             
             s.close()
-        except Exception as e:
-            print(f"Error sending message to {peer}: {e}")
-            # If sending fails, treat it as a node failure
-            failed_node = peer[1] - 9000
-            self.handle_node_failure(failed_node)
+
+        except Exception:
+            print(f"Error sending message to {peer}")
         
     def broadcast(self, message):
         print(f"Node {self.node_id} broadcasting: {message}")
@@ -141,7 +134,8 @@ class CentralServer:
             cmd = parts[0].lower()
             src_port, dest_port = int(parts[1]) + 9000, int(parts[2]) + 9000
             if cmd == "faillink" and len(parts) == 3:
-                for peer in self.peers:
+                # traverse peers list and send message to both nodes whos link is being failed
+                for peer in peers:
                     if peer[1] == src_port or peer[1] == dest_port:
                         self.send_message(peer, command) 
                         print("Sent", command,  "to node:", peer)
@@ -149,13 +143,14 @@ class CentralServer:
             else:
                 print("Invalid faillink command")
             
+        # fixlink src dest
         elif command.startswith("fixlink"):
             parts = command.split()
             cmd = parts[0].lower()
             src_port, dest_port = int(parts[1]) + 9000, int(parts[2]) + 9000
 
             if cmd == "fixlink" and len(parts) == 3:
-                for peer in self.peers:
+                for peer in peers:
                     if peer[1] == src_port or peer[1] == dest_port:
                         self.send_message(peer, command) 
                         print("Sent", command,  "to node:", peer)
@@ -163,18 +158,50 @@ class CentralServer:
             else:
                 print("Invalid fixlink command")
                 
+        # failnode node_id
         elif command.startswith("failnode"):
             parts = command.split()
             cmd = parts[0].lower()
             target_node = int(parts[1])
 
             if cmd == "failnode" and len(parts) == 2:
+                # Add to failed nodes set
+                self.failed_nodes.add(target_node)
                 self.broadcast(command)
                 self.peers = [peer for peer in self.peers if peer[1] != 9000 + target_node]
                 print("We just failed node:", parts[1])
             else:
                 print("Invalid failnode command")
 
+        # ---------------------CENTRAL SERVER CREATING CONTEXT DICTIONARY--------------------
+
+        # query context_id query_string
+        elif command.startswith("query"):
+            parts = command.split() # query context_id query_string
+            context_id = int(parts[1])
+            query_string = " ".join(parts[2:])
+            self.contexts[context_id] = self.contexts.get(context_id, "") + "Query: " + query_string + " "
+            print(f"Central Server's current contexts: {self.contexts}") # for debugging
+        
+        # Answer: response context_id
+        elif command.startswith("Answer: "): 
+            parts = command.split() # Answer: response context_id
+            response = " ".join(parts[0:-1])
+            context_id = int(parts[-1])
+            self.contexts[context_id] = self.contexts.get(context_id, "") + response + " "
+            print(f"Central Server's current contexts: {self.contexts}") # for debugging
+    
+        # LOG node_id
+        elif command.startswith("LOG"):
+            parts = command.split()
+            node_id = int(parts[1])
+            print(f"Node {node_id} requested the context dictionary.")
+            self.send_message(("localhost", 9000 + node_id), f"CONTEXT {self.contexts}")
+
+
+            
+
+        # ---------------------CENTRAL SERVER CREATING CONTEXT DICTIONARY---------------------
 class Node:
     def __init__(self, node_id, port, peers):
         self.node_id = node_id # ID of process 1 = 1, process 2 = 2, process 3 = 3
@@ -195,10 +222,20 @@ class Node:
         self.node_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.node_socket.bind(('localhost', self.port))
         self.node_socket.listen(5)
+
+    def start_heartbeat(self):
+        while True:
+            self.send_heartbeat()
+            time.sleep(1)  
+
+    def send_heartbeat(self):
+        heartbeat_message = "heartbeat"
+        self.send_to_central_server(heartbeat_message)
         
     def start(self):
         print(f"Node {self.node_id} started on port {self.port}")
         threading.Thread(target=self.listen).start()
+        threading.Thread(target=self.start_heartbeat).start()  # Start heartbeat thread
 
     def listen(self):
         while True:
@@ -216,6 +253,7 @@ class Node:
 
     def send_to_central_server(self, value):
         central_server_port = 9000  
+        # if value != "heartbeat":
         print(f"Node {self.node_id} sending value to central server: {value}")
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -350,7 +388,10 @@ class Node:
                     if peer[1] == target_port:
                         self.peers.remove(peer)
                         print("new peers list: ", self.peers)
-                        break         
+                        break   
+
+        elif message.startswith("TIMEOUT"):
+            print("we got here")
             
         else: 
             time.sleep(3)
