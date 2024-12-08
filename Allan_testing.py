@@ -148,6 +148,8 @@ class Node:
         self.contexts = {}
         self.promise_responses_dict = {} # Dictionary to store the promises received from the acceptors
         self.myVal = ""
+        self.candidate_answers = {} # Dictionary to store the answers of the nodes, Leader accesses this only
+
 
         # Initialize server socket
         self.node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -266,6 +268,15 @@ class Node:
             command = message.split(" ", 4)[4]
             self.handle_decide(command)
         
+        elif message.startswith("Candidate: "): # Leader handles this
+            parts = message.split() # Candidate: response context_id node_id
+            response = " ".join(parts[1:-2]) # response = "response"
+            context_id = int(parts[-2]) # context_id = num
+            node_id = int(parts[-1]) # node_id = num
+            self.candidate_answers[node_id] = response + " " + str(context_id)
+            print(self.candidate_answers) # For debugging
+
+
         elif message.startswith("faillink"):# message = "faillink src dest"
             # print("Node", self.node_id, "received message:", message) # for debugging
             # Traverse the peers list and get rid of the other node so they are not a peer anymore
@@ -472,7 +483,6 @@ class Node:
             # -----------------------Gemini-------------------------------
             genai.configure(api_key="AIzaSyC64zw3CDFPuK1IJsyB_PyGA355XnmT2zw")
             model = genai.GenerativeModel("gemini-1.5-flash")
-  
             # -----------------------Gemini---------------------------------
 
             command_list = command.split() # query context_id query_string --> Query the LLM on a context ID with a query string
@@ -499,18 +509,44 @@ class Node:
                 # response_text = "Answer: " + response.text
                 # print(response_text)
 
+                # Every node will send their gemini response to leader
+                # Leader will then decide which response to choose
+                if self.node_id != self.current_leader:
+                    send_response_to_leader = "Candidate: " + response.text.strip() + " " + str(context_id) + " " + str(self.node_id) # Answer: California 0 3 (context Id = 0 from node 3)
+                    self.send_message(("localhost", 9000 + self.current_leader), send_response_to_leader)
+                else: # I am the leader
+                    # add my response to candidate_answers dictionary
+                    self.candidate_answers[self.node_id] = response.text.strip() + " " + str(context_id) # 3: "California 0"
+
+
+
+
+
+
+
                 # MAYBE HERE WE CAN ASK FOR USER INPUT TO PICK THE FINAL ANSWER INSTEAD OF IT ALWAYS BEING THE LEADER'S ANSWER --------------------------
 
-                if self.node_id == self.current_leader: # leader's answer will always be the final answer
-                    self.contexts[context_id] = self.contexts[context_id] + " " + "Answer: " + response.text.strip() + " "
-                    print(f"Node {self.node_id} queried context:", self.contexts)
+                # if self.node_id == self.current_leader: # leader's answer will always be the final answer
+                #     # OLD CODE WHERE WE AGREED ON LEADERS ANSWER -----------------------------------------------------
+                #     self.contexts[context_id] = self.contexts[context_id] + " " + "Answer: " + response.text.strip() + " "
+                #     print(f"Node {self.node_id} queried context:", self.contexts)
+                #     time.sleep(3)
+                #     print("Reaching consensus on the final answer")
+                #     answer_with_context_id_command = "Answer: " + response.text.strip() + " " + str(context_id)
+                #     self.replicate_operation(answer_with_context_id_command)
+                #     # OLD CODE WHERE WE AGREED ON LEADERS ANSWER -----------------------------------------------------
 
-                    time.sleep(3)
-                    print("Reaching consensus on the final answer")
-                    answer_with_context_id_command = "Answer: " + response.text.strip() + " " + str(context_id)
 
-                    self.replicate_operation(answer_with_context_id_command)
+
+
+
+        elif command.startswith("choose"): # choose <context_ID> <node_ID>
+            print("Choose doesn't work yet")
                     
+
+
+
+
 
         elif command.startswith("Answer: "):
             self.ballot_tuple[2] += 1
