@@ -70,6 +70,7 @@ class CentralServer:
 
     def process_command(self, command):
 
+        # faillink src dest
         if command.startswith("faillink"):
             parts = command.split()
             cmd = parts[0].lower()
@@ -84,6 +85,7 @@ class CentralServer:
             else:
                 print("Invalid faillink command")
             
+        # fixlink src dest
         elif command.startswith("fixlink"):
             parts = command.split()
             cmd = parts[0].lower()
@@ -98,6 +100,7 @@ class CentralServer:
             else:
                 print("Invalid fixlink command")
                 
+        # failnode node_id
         elif command.startswith("failnode"):
             parts = command.split()
             cmd = parts[0].lower()
@@ -118,13 +121,16 @@ class CentralServer:
         #     self.contexts[context_id] = ""
         #     print(f"Central Server's current contexts: {self.contexts}") # for debugging
 
+        # query context_id query_string
         elif command.startswith("query"):
             parts = command.split() # query context_id query_string
             context_id = int(parts[1])
             query_string = " ".join(parts[2:])
             self.contexts[context_id] = self.contexts.get(context_id, "") + "Query: " + query_string + " "
             print(f"Central Server's current contexts: {self.contexts}") # for debugging
-        elif command.startswith("Answer: "): # Answer: response context_id
+        
+        # Answer: response context_id
+        elif command.startswith("Answer: "): 
             parts = command.split() # Answer: response context_id
             response = " ".join(parts[0:-1])
             context_id = int(parts[-1])
@@ -138,6 +144,15 @@ class CentralServer:
         #     answer = " ".join(answer)
         #     self.contexts[context_id] += answer
         #     print(f"Central Server's current contexts: {self.contexts}")
+    
+        # LOG node_id
+        elif command.startswith("LOG"):
+            parts = command.split()
+            node_id = int(parts[1])
+            print(f"Node {node_id} requested the context dictionary.")
+            self.send_message(("localhost", 9000 + node_id), f"CONTEXT {self.contexts}")
+
+
             
 
         # ---------------------CENTRAL SERVER CREATING CONTEXT DICTIONARY---------------------
@@ -353,8 +368,14 @@ class Node:
                         print("New peers list: ", self.peers)
                         break
         
-            
-        else: 
+        elif message.startswith("CONTEXT"): # message = "CONTEXT {context_id: context, context_id: context}"
+            self.contexts = eval(message.split(" ", 1)[1])
+            print(f"Node {self.node_id} updated context dictionary received from central server:", self.contexts)
+
+
+
+
+        else: # leader does this
             print(f"Node {self.node_id} received: {message}")
             # time.sleep(3)
             print("Replicating operations:", message)
@@ -399,12 +420,22 @@ class Node:
         if ballot > self.ballot_tuple[0]:
             self.ballot_tuple[0] = ballot  # Update the ballot tuple
             promise_message = f"PROMISE {ballot} {node_id} {self.accepted_ballot_num} {self.accepted_val_num}"
-            node.send_message(("localhost", 9000 + node_id), promise_message)  # Send promise back to the leader
+            try:
+                node.send_message(("localhost", 9000 + node_id), promise_message)  # Send promise back to the leader
+            except Exception:
+                print(f"Leader {node_id} is down. Cannot send promise message.")
+                
+
+        # This code doesn't do anything :(
         elif ballot == self.ballot_tuple[0]:
             if node_id > self.node_id:
                 self.ballot_tuple[0] = ballot  # Update the ballot tuple
                 promise_message = f"PROMISE {ballot} {node_id} {self.accepted_ballot_num} {self.accepted_val_num}"
-                node.send_message(("localhost", 9000 + node_id), promise_message)  # Send promise back to the leader
+                try:
+                    node.send_message(("localhost", 9000 + node_id), promise_message)  # Send promise back to the leader
+                except Exception:
+                    print(f"Leader {node_id} is down. Cannot send promise message.")
+                
 
     def replicate_operation(self, command): # Leader sends out Accept messages
         time.sleep(3)
@@ -481,6 +512,14 @@ class Node:
                 self.send_message(("localhost", 9000 + self.current_leader), accepted_message) 
             else:
                 print("Current leader is not set. Cannot send ACCEPTED message.")
+            
+            # Case where node is behind in operation number
+            if (self.ballot_tuple[2] < operation_num): 
+                self.ballot_tuple[2] = operation_num
+                print(f"Node {self.node_id} updated operation number to {operation_num} because I was behind.")
+                message_to_central_server = "LOG " + str(self.node_id) 
+                # ask the central server for the most recent dictionary
+                self.send_to_central_server(message_to_central_server)
 
     def decide_operation(self, command, ballot, node_id, op_num): # Leader sends out DECIDE messages
         if hasattr(self, "broadcast_decide") and self.broadcast_decide:
