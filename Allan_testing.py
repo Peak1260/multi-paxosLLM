@@ -30,7 +30,7 @@ import sys
 os.environ["GRPC_VERBOSITY"] = "NONE"
 
 class CentralServer:
-    def __init__(self, peers):
+    def __init__(self):
         self.node_id = 0
         self.port = 9000
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -38,8 +38,9 @@ class CentralServer:
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_socket.listen(5)
         self.num_nodes = 3
-        self.peers = peers
+        self.peers = [] # starts off as an empty list 
         self.contexts = {}
+        self.current_leader = None
 
     def start(self):
         print(f"Central server started on port {self.port}")
@@ -57,18 +58,24 @@ class CentralServer:
             conn.close()
 
     def send_message(self, peer, message):
-        print(f"Node {self.node_id} sending to {peer}: {message}")
+        if not message.startswith("ALIVE"):
+            print(f"Node {self.node_id} sending to {peer}: {message}")
+
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect(peer)
         s.sendall(message.encode())
         s.close()
         
     def broadcast(self, message):
-        print(f"Node {self.node_id} broadcasting: {message}")
+        if not message.startswith("ALIVE"):
+            print(f"Node {self.node_id} broadcasting: {message}")
+
         for peer in self.peers:
             self.send_message(peer, message)
 
     def process_command(self, command):
+
+
 
         # faillink src dest
         if command.startswith("faillink"):
@@ -108,18 +115,21 @@ class CentralServer:
 
             if cmd == "failnode" and len(parts) == 2:
                 self.broadcast(command)
-                self.peers = [peer for peer in self.peers if peer[1] != 9000 + target_node]
+                # self.peers = [peer for peer in self.peers if peer[1] != 9000 + target_node]
+                # remove the node from the peers list
+                self.peers.remove(("localhost", 9000 + target_node))
+                print("NEW PEERS LIST:", self.peers)
                 print("We just failed node:", parts[1])
             else:
                 print("Invalid failnode command")
 
 
         # ---------------------CENTRAL SERVER CREATING CONTEXT DICTIONARY---------------------
-        # elif command.startswith("create"):
-        #     parts = command.split() # create context_id
-        #     context_id = int(parts[1])
-        #     self.contexts[context_id] = ""
-        #     print(f"Central Server's current contexts: {self.contexts}") # for debugging
+        elif command.startswith("create"):
+            parts = command.split() # create context_id
+            context_id = int(parts[1])
+            self.contexts[context_id] = ""
+            print(f"Central Server's current contexts: {self.contexts}") # for debugging
 
         # query context_id query_string
         elif command.startswith("query"):
@@ -144,18 +154,44 @@ class CentralServer:
         #     answer = " ".join(answer)
         #     self.contexts[context_id] += answer
         #     print(f"Central Server's current contexts: {self.contexts}")
-    
+        # ---------------------CENTRAL SERVER CREATING CONTEXT DICTIONARY---------------------
+
+
+        # RECOVERY -------------------------
+        elif command.startswith("ALIVE"): # ALIVE node_id
+            parts = command.split()
+            node_id = int(parts[1])
+            # Add this node to the peers list
+            self.peers.append(("localhost", 9000 + node_id))
+            print(f"Node {node_id} is alive.")
+            print("Peers list:", self.peers)
+
+            # Broadcast to all peers that this node is alive
+            if self.current_leader is not None:
+                self.broadcast(command + " " + str(self.current_leader))
+            else:
+                self.broadcast(command)
+
+
+        elif command.startswith("LEADER"): # LEADER node_id
+            parts = command.split()
+            self.current_leader = parts[1]
+
+
+
         # LOG node_id
         elif command.startswith("LOG"):
             parts = command.split()
             node_id = int(parts[1])
             print(f"Node {node_id} requested the context dictionary.")
             self.send_message(("localhost", 9000 + node_id), f"CONTEXT {self.contexts}")
+        
+        # RECOVERY -------------------------
 
 
             
 
-        # ---------------------CENTRAL SERVER CREATING CONTEXT DICTIONARY---------------------
+
 
             
             
@@ -184,6 +220,10 @@ class Node:
         self.node_socket.listen(5)
         
     def start(self):
+        # Send a message to the central server that we are up
+        alive_message = "ALIVE " + str(self.node_id)
+        self.send_to_central_server(alive_message)
+
         print(f"Node {self.node_id} started on port {self.port}")
         threading.Thread(target=self.listen).start()
 
@@ -317,8 +357,6 @@ class Node:
                     print("Context", context_id, "- Candidate", candidate, ":", answer)
                     print()
 
-
-
         elif message.startswith("faillink"):# message = "faillink src dest"
             # print("Node", self.node_id, "received message:", message) # for debugging
             # Traverse the peers list and get rid of the other node so they are not a peer anymore
@@ -368,9 +406,25 @@ class Node:
                         print("New peers list: ", self.peers)
                         break
         
+        # RECOVERY -------------------------
+        elif message.startswith("ALIVE"): # message = "ALIVE node_id leader_id"
+            parts = message.split()
+            node_id = int(parts[1])
+
+            if len(parts) == 3:
+                self.current_leader = int(parts[2])
+
+            # Add this node to the peers list
+            if ("localhost", 9000 + node_id) not in self.peers:
+                if node_id != self.node_id:
+                    self.peers.append(("localhost", 9000 + node_id))
+                    print(f"Node {node_id} is alive.")
+                    print("Peers list:", self.peers)
+
         elif message.startswith("CONTEXT"): # message = "CONTEXT {context_id: context, context_id: context}"
             self.contexts = eval(message.split(" ", 1)[1])
             print(f"Node {self.node_id} updated context dictionary received from central server:", self.contexts)
+        # RECOVERY -------------------------
 
 
 
@@ -451,6 +505,8 @@ class Node:
         self.broadcast_promise = True
             
         self.current_leader = node_id
+        self.send_to_central_server(f"LEADER {self.current_leader}")
+
         leader_message = f"LEADER {self.current_leader}"
         # DON'T BROADCAST LEADER MESSAGE, SEND TO THE RIGHT NODE WHO RESPONDED TO THE PROMISE
         for peer in self.peers:
@@ -690,11 +746,12 @@ class Node:
             print(f"Command -> {command} <- not recognized.")   
 
 if __name__ == "__main__":
-    import sys
     node_id = int(sys.argv[1])
-    port = 9000 + node_id
-    peers = [("localhost", 9000 + i + 1) for i in range(3) if (i+1) != node_id]
-    print(f"Node {node_id} peers: {peers}") # for debugging
+
+    if node_id != 0: # All the nodes do this but Central Server does not autofill its peers
+        port = 9000 + node_id
+        peers = [("localhost", 9000 + i + 1) for i in range(3) if (i+1) != node_id]
+        print(f"Node {node_id} peers: {peers}") # for debugging
     
     running_flag = True
     server_running = True
@@ -702,7 +759,7 @@ if __name__ == "__main__":
     
     while running_flag:
         if node_id == 0: 
-            server = CentralServer(peers)
+            server = CentralServer()
             threading.Thread(target=server.start).start()
             
             while server_running:
