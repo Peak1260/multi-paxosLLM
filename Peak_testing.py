@@ -7,7 +7,7 @@ import sys
 os.environ["GRPC_VERBOSITY"] = "NONE"
 
 class CentralServer:
-    def __init__(self, peers):
+    def __init__(self):
         self.node_id = 0
         self.port = 9000
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -15,130 +15,52 @@ class CentralServer:
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_socket.listen(5)
         self.num_nodes = 3
-        self.peers = peers
-        self.active_connections = {}
-        #{9001: 1733696872.7281015, 9002: 1733696872.7281015, 9003: 1733696872.7281015}
-        self.connection_lock = threading.Lock()
-        self.timeout_interval = 6  # 6 seconds timeout
-        self.failed_nodes = set()  # Track nodes that have failed
-        self.timed_out_nodes = set()  # Track nodes already timed out
+        self.peers = [] # starts off as an empty list 
+        self.contexts = {}
+        self.current_leader = 0
 
     def start(self):
         print(f"Central server started on port {self.port}")
-        
-        # Start heartbeat monitoring thread
-        heartbeat_thread = threading.Thread(target=self.monitor_node_connections)
-        heartbeat_thread.daemon = True
-        heartbeat_thread.start()
-        
-        # Accept incoming connections
         while True:
             conn, addr = self.server_socket.accept()
-            threading.Thread(target=self.handle_node_connection, args=(conn, addr)).start()
+            threading.Thread(target=self.handle_node_connection, args=(conn,)).start()
 
-    def handle_node_connection(self, conn, addr):
+    def handle_node_connection(self, conn):
         try:
-            while True:
-                data = conn.recv(1024).decode()
-                if not data:
-                    break
-                
-                if data != "heartbeat":
+            data = conn.recv(1024).decode()
+            if data:
+                if not (data.startswith("ALIVE") or data.startswith("LEADER") or data.startswith("choose")): 
                     print(f"Central server received value: {data}")
-
-                if data == "heartbeat":
-                    with self.connection_lock:
-                        # Update last heartbeat time for this connection
-                        for peer in self.peers:
-                            self.active_connections[peer[1]] = time.time()
-                        print(self.active_connections)
-                    
-                else:
-                    self.process_command(data)
-
-        except Exception:
-            print(f"Connection error with {addr}")
-
+                self.process_command(data)
         finally:
             conn.close()
 
-    def monitor_node_connections(self):
-        while True:
-            current_time = time.time()
-            
-            with self.connection_lock:
-                # Check active connections for timeouts
-                for port, last_heartbeat in list(self.active_connections.items()):
-                    if current_time - last_heartbeat > self.timeout_interval:
-                        print(f"Node on port {port} timed out.")
-                        failed_node = port - 9000
-                        del self.active_connections[port]
-                        self.failed_nodes.add(failed_node)
-                        self.handle_node_failure(failed_node)
-                
-                # Check for recovery of failed nodes
-                for failed_node in list(self.failed_nodes):
-                    failed_port = failed_node + 9000
-                    if failed_port in self.active_connections:
-                        continue  # Skip if already active
-
-                    # Try to detect recovery (e.g., check if a heartbeat is received)
-                    if failed_port in self.timed_out_nodes:
-                        # If recovered, move back to active connections
-                        print(f"Node {failed_node} recovered.")
-                        self.active_connections[failed_port] = current_time
-                        self.failed_nodes.remove(failed_node)
-
-            time.sleep(1)
-            
-
-    def handle_node_failure(self, failed_node):
-        # Add to timed out nodes to prevent repeated timeouts
-        with self.connection_lock:
-            if failed_node in self.timed_out_nodes:
-                return
-            self.timed_out_nodes.add(failed_node)
-        # Broadcast timeout message to all remaining nodes
-        timeout_message = f"TIMEOUT {failed_node}"
-        failed_port = failed_node + 9000
-        for peer in self.peers:
-            if peer[1] != failed_port:
-                self.send_message(peer, timeout_message)
-        
-        print(f"Node {failed_node} timed out")
-
     def send_message(self, peer, message):
-        try:
+        if not message.startswith("ALIVE"):
             print(f"Node {self.node_id} sending to {peer}: {message}")
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect(peer)
-            s.sendall(message.encode())
-            
-            # Maintain the connection in active connections
-            with self.connection_lock:
-                self.active_connections[peer[1]] = time.time()
-            
-            s.close()
 
-        except Exception:
-            print(f"Error sending message to {peer}")
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect(peer)
+        s.sendall(message.encode())
+        s.close()
         
     def broadcast(self, message):
-        print(f"Node {self.node_id} broadcasting: {message}")
         for peer in self.peers:
             self.send_message(peer, message)
 
     def process_command(self, command):
+
+        # faillink src dest
         if command.startswith("faillink"):
             parts = command.split()
             cmd = parts[0].lower()
             src_port, dest_port = int(parts[1]) + 9000, int(parts[2]) + 9000
             if cmd == "faillink" and len(parts) == 3:
                 # traverse peers list and send message to both nodes whos link is being failed
-                for peer in peers:
+                for peer in self.peers:
                     if peer[1] == src_port or peer[1] == dest_port:
                         self.send_message(peer, command) 
-                        print("Sent", command,  "to node:", peer)
+                        # print("Sent", command,  "to node:", peer)
                 print("Fail link between", src_port, "and", dest_port)
             else:
                 print("Invalid faillink command")
@@ -150,10 +72,10 @@ class CentralServer:
             src_port, dest_port = int(parts[1]) + 9000, int(parts[2]) + 9000
 
             if cmd == "fixlink" and len(parts) == 3:
-                for peer in peers:
+                for peer in self.peers:
                     if peer[1] == src_port or peer[1] == dest_port:
                         self.send_message(peer, command) 
-                        print("Sent", command,  "to node:", peer)
+                        # print("Sent", command,  "to node:", peer)
                 print("Fix link between", src_port, "and", dest_port)
             else:
                 print("Invalid fixlink command")
@@ -165,15 +87,22 @@ class CentralServer:
             target_node = int(parts[1])
 
             if cmd == "failnode" and len(parts) == 2:
-                # Add to failed nodes set
-                self.failed_nodes.add(target_node)
                 self.broadcast(command)
-                self.peers = [peer for peer in self.peers if peer[1] != 9000 + target_node]
+                # self.peers = [peer for peer in self.peers if peer[1] != 9000 + target_node]
+                # remove the node from the peers list
+                self.peers.remove(("localhost", 9000 + target_node))
+                # print("NEW PEERS LIST:", self.peers)
                 print("We just failed node:", parts[1])
             else:
                 print("Invalid failnode command")
 
-        # ---------------------CENTRAL SERVER CREATING CONTEXT DICTIONARY--------------------
+
+        # ---------------------CENTRAL SERVER CREATING CONTEXT DICTIONARY---------------------
+        elif command.startswith("create"):
+            parts = command.split() # create context_id
+            context_id = int(parts[1])
+            self.contexts[context_id] = ""
+            # print(f"Central Server's current contexts: {self.contexts}") # for debugging
 
         # query context_id query_string
         elif command.startswith("query"):
@@ -181,7 +110,7 @@ class CentralServer:
             context_id = int(parts[1])
             query_string = " ".join(parts[2:])
             self.contexts[context_id] = self.contexts.get(context_id, "") + "Query: " + query_string + " "
-            print(f"Central Server's current contexts: {self.contexts}") # for debugging
+            # print(f"Central Server's current contexts: {self.contexts}") # for debugging
         
         # Answer: response context_id
         elif command.startswith("Answer: "): 
@@ -189,25 +118,47 @@ class CentralServer:
             response = " ".join(parts[0:-1])
             context_id = int(parts[-1])
             self.contexts[context_id] = self.contexts.get(context_id, "") + response + " "
-            print(f"Central Server's current contexts: {self.contexts}") # for debugging
-    
+            # print(f"Central Server's current contexts: {self.contexts}") # for debugging
+
+        # ---------------------CENTRAL SERVER CREATING CONTEXT DICTIONARY---------------------
+
+
+        # RECOVERY -------------------------
+        elif command.startswith("ALIVE"): # ALIVE node_id
+            parts = command.split()
+            node_id = int(parts[1])
+            # Add this node to the peers list
+            self.peers.append(("localhost", 9000 + node_id))
+            print(f"Node {node_id} is alive.")
+            # print("Peers list:", self.peers)
+
+            # Broadcast to all peers that this node is alive
+            if self.current_leader != 0:
+                self.broadcast(command + " " + str(self.current_leader))
+            else:
+                self.broadcast(command)
+
+
+        elif command.startswith("LEADER"): # LEADER node_id
+            parts = command.split()
+            self.current_leader = parts[1]
+
         # LOG node_id
         elif command.startswith("LOG"):
             parts = command.split()
             node_id = int(parts[1])
-            print(f"Node {node_id} requested the context dictionary.")
+            print(f"Node {node_id} requested the log.")
             self.send_message(("localhost", 9000 + node_id), f"CONTEXT {self.contexts}")
+        
+        # RECOVERY -------------------------
+               
 
-
-            
-
-        # ---------------------CENTRAL SERVER CREATING CONTEXT DICTIONARY---------------------
 class Node:
     def __init__(self, node_id, port, peers):
         self.node_id = node_id # ID of process 1 = 1, process 2 = 2, process 3 = 3
         self.port = port # Port of process 1 = 9001, process 2 = 9002, process 3 = 9003
         self.peers = peers  # List of (host, port) tuples for other nodes
-        self.current_leader = None # Current leader of the network 
+        self.current_leader = 0 # Current leader of the network 
         self.ballot_tuple = [0,node_id,0]  # (seq_num, pid, op_num)
         self.accepted_ballot_num = 0 # Highest ballot number accepted by the acceptor
         self.accepted_val_num = 0 # previous value accepted by the acceptor
@@ -216,26 +167,22 @@ class Node:
         self.contexts = {}
         self.promise_responses_dict = {} # Dictionary to store the promises received from the acceptors
         self.myVal = ""
+        self.candidate_answers = {} # Dictionary to store the answers of the nodes, Leader accesses this only
+
 
         # Initialize server socket
         self.node_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.node_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.node_socket.bind(('localhost', self.port))
         self.node_socket.listen(5)
-
-    def start_heartbeat(self):
-        while True:
-            self.send_heartbeat()
-            time.sleep(1)  
-
-    def send_heartbeat(self):
-        heartbeat_message = "heartbeat"
-        self.send_to_central_server(heartbeat_message)
         
     def start(self):
+        # Send a message to the central server that we are up
+        alive_message = "ALIVE " + str(self.node_id)
+        self.send_to_central_server(alive_message)
+
         print(f"Node {self.node_id} started on port {self.port}")
         threading.Thread(target=self.listen).start()
-        threading.Thread(target=self.start_heartbeat).start()  # Start heartbeat thread
 
     def listen(self):
         while True:
@@ -252,9 +199,9 @@ class Node:
             conn.close()
 
     def send_to_central_server(self, value):
-        central_server_port = 9000  
-        # if value != "heartbeat":
-        print(f"Node {self.node_id} sending value to central server: {value}")
+        central_server_port = 9000 
+        if not (value.startswith("LOG") or value.startswith("ALIVE") or value.startswith("LEADER") or value.startswith("choose")): 
+            print(f"Node {self.node_id} sending value to central server: {value}")
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.connect(('localhost', central_server_port))
@@ -264,11 +211,10 @@ class Node:
 
     def process_message(self, message):
         # Implement logic to process PREPARE, PROMISE, ACCEPT, DECIDE, etc.
-        print(f"Node {self.node_id} received: {message}")
-
-        
+        # print(f"Node {self.node_id} received: {message}")
 
         if message.startswith("PREPARE"): # Acceptors handle this
+            print(f"Node {self.node_id} received: {message}")
             time.sleep(3)
             _, ballot, node_id, _ = message.split()
             ballot = int(ballot)
@@ -277,6 +223,7 @@ class Node:
     
 
         elif message.startswith("PROMISE"): # Leader handles this
+            print(f"Node {self.node_id} received: {message}")
             time.sleep(3)
             list_of_messages = message.split(" ")
   
@@ -293,16 +240,16 @@ class Node:
         elif message.startswith("LEADER"):
             time.sleep(1)
             _, leader_id = message.split()
-            if leader_id == "None":
-                leader_id = None
+            if leader_id == 0:
+                self.current_leader = 0
             else:
-                leader_id = int(leader_id)
+                self.current_leader = int(leader_id)
                 
-            self.handle_leader(leader_id) 
-            print("got here")
+            # self.handle_leader(leader_id) 
 
     
         elif message.startswith("ACCEPT "):
+            print(f"Node {self.node_id} received: {message}")
             time.sleep(3)
     
             # Split the message into parts
@@ -322,6 +269,7 @@ class Node:
 
 
         elif message.startswith("ACCEPTED"): # Leader handles this
+            print(f"Node {self.node_id} received: {message}")
             # Message looks like: ACCEPTED 1 3 0 create 0
             time.sleep(3)
             command = message.split(" ", 4)[4]
@@ -336,11 +284,32 @@ class Node:
             self.decide_operation(command, ballot, node_id, op_num)          
 
         elif message.startswith("DECIDE"):
+            print(f"Node {self.node_id} received: {message}")
             time.sleep(3)
-            print("DECIDE message received")
             command = message.split(" ", 4)[4]
             self.handle_decide(command)
         
+        elif message.startswith("Candidate: "): # Leader handles this
+            self.count_responses += 1
+
+            parts = message.split() # Candidate: response context_id node_id
+            response = " ".join(parts[1:-2]) # response = "response"
+            context_id = int(parts[-2]) # context_id = num
+            node_id = int(parts[-1]) # node_id = num
+            self.candidate_answers[node_id] = response + " " + str(context_id)
+
+            # time.sleep(1)
+            if self.count_responses == len(self.peers): # If we have received all responses from the nodes
+                self.count_responses = 0 # Reset the count
+                # print("Candidate answers:", self.candidate_answers) # For debugging
+                for candidate in self.candidate_answers.keys():
+                    # self.candidate_answers[candidate] would be response + " " + context_id but I just want the response
+                    # even if response is longer than one word
+                    answer = self.candidate_answers[candidate].split()[0:-1] # answer = response
+                    answer = " ".join(answer)
+                    print("Context", context_id, "- Candidate", candidate, ":", answer)
+                    print()
+
         elif message.startswith("faillink"):# message = "faillink src dest"
             # print("Node", self.node_id, "received message:", message) # for debugging
             # Traverse the peers list and get rid of the other node so they are not a peer anymore
@@ -350,8 +319,8 @@ class Node:
             for peer in self.peers:
                 if peer[1] == src_port or peer[1] == dest_port:
                     self.peers.remove(peer)
-                    print(self.peers)
-                    print("Node", self.node_id, "removed peer:", peer)
+                    # print("New peers list:", self.peers)
+                    # print("Node", self.node_id, "removed peer:", peer)
 
         elif message.startswith("fixlink"):# message = "faillink src dest"
             # print("Node", self.node_id, "received message:", message) # for debugging
@@ -362,10 +331,10 @@ class Node:
             # append the peer that isn't myself
             if src_port != self.port:
                 self.peers.append(("localhost", src_port))
-                print("new peers list: ", self.peers)
+                # print("New peers list:", self.peers)
             else:
                 self.peers.append(("localhost", dest_port))
-                print("new peers list: ", self.peers)
+                # print("New peers list:", self.peers)
                 
         elif message.startswith("failnode"): # message = "failnode node_id"
             command = message.split() # failnode node_id
@@ -374,12 +343,10 @@ class Node:
             if target_port == self.port: # If the node that failed is me
                 print("Node", self.node_id, "failed.")
                 if self.current_leader == self.node_id:
-                    self.current_leader = None
+                    self.current_leader = 0
                     leader_message = f"LEADER {self.current_leader}"
                     self.broadcast(leader_message)
-                    
-                self.peers = []
-                print("new peers list is empty: ", self.peers)
+                    time.sleep(1)
                 
                 os._exit(0)
 
@@ -387,26 +354,43 @@ class Node:
                 for peer in self.peers:
                     if peer[1] == target_port:
                         self.peers.remove(peer)
-                        print("new peers list: ", self.peers)
-                        break   
+                        # print("New peers list: ", self.peers)
+                        break
+        
+        # RECOVERY -------------------------
+        elif message.startswith("ALIVE"): # message = "ALIVE node_id leader_id"
+            parts = message.split()
+            node_id = int(parts[1])
 
-        elif message.startswith("TIMEOUT"):
-            print("we got here")
-            
-        else: 
-            time.sleep(3)
+            if len(parts) == 3:
+                self.current_leader = int(parts[2])
+
+            # Add this node to the peers list
+            if ("localhost", 9000 + node_id) not in self.peers:
+                if node_id != self.node_id:
+                    self.peers.append(("localhost", 9000 + node_id))
+                    # print(f"Node {node_id} is alive.")
+                    # print("Peers list:", self.peers)
+
+        elif message.startswith("CONTEXT"): # message = "CONTEXT {context_id: context, context_id: context}"
+            self.contexts = eval(message.split(" ", 1)[1])
+            print(f"Updated context dictionary:", self.contexts)
+        # RECOVERY -------------------------
+
+        else: # leader does this
+            print(f"Node {self.node_id} received: {message}")
             print("Replicating operations:", message)
             self.replicate_operation(message)
 
 
     def broadcast(self, message):
-        print(f"Node {self.node_id} broadcasting: {message}")
         for peer in self.peers:
             self.send_message(peer, message)
 
-
     def send_message(self, peer, message):
-        print(f"Node {self.node_id} sending to {peer}: {message}")
+        if not (message.startswith("LEADER")):
+            print(f"Node {self.node_id} sending to {peer}: {message}")
+    
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect(peer)
         s.sendall(message.encode())
@@ -434,14 +418,23 @@ class Node:
         if ballot > self.ballot_tuple[0]:
             self.ballot_tuple[0] = ballot  # Update the ballot tuple
             promise_message = f"PROMISE {ballot} {node_id} {self.accepted_ballot_num} {self.accepted_val_num}"
-            node.send_message(("localhost", 9000 + node_id), promise_message)  # Send promise back to the leader
+            try:
+                node.send_message(("localhost", 9000 + node_id), promise_message)  # Send promise back to the leader
+            except Exception:
+                print(f"Leader {node_id} is down. Cannot send promise message.")
+                
         elif ballot == self.ballot_tuple[0]:
             if node_id > self.node_id:
                 self.ballot_tuple[0] = ballot  # Update the ballot tuple
                 promise_message = f"PROMISE {ballot} {node_id} {self.accepted_ballot_num} {self.accepted_val_num}"
-                node.send_message(("localhost", 9000 + node_id), promise_message)  # Send promise back to the leader
+                try:
+                    node.send_message(("localhost", 9000 + node_id), promise_message)  # Send promise back to the leader
+                except Exception:
+                    print(f"Leader {node_id} is down. Cannot send promise message.")
+                
 
     def replicate_operation(self, command): # Leader sends out Accept messages
+        time.sleep(3)
         accept_message = f"ACCEPT {self.ballot_tuple[0]} {self.ballot_tuple[1]} {self.ballot_tuple[2]} {command}" # ACCEPT seq_num, pid, op_num, command
         self.broadcast(accept_message)
 
@@ -454,6 +447,8 @@ class Node:
         self.broadcast_promise = True
             
         self.current_leader = node_id
+        self.send_to_central_server(f"LEADER {self.current_leader}")
+
         leader_message = f"LEADER {self.current_leader}"
         # DON'T BROADCAST LEADER MESSAGE, SEND TO THE RIGHT NODE WHO RESPONDED TO THE PROMISE
         for peer in self.peers:
@@ -495,8 +490,8 @@ class Node:
             if peer[1] != 9000 + node_id:  # Skip sending to itself
                 self.send_message(peer, accept_message)
 
-    def handle_leader(self, leader_id):
-        self.current_leader = leader_id
+    # def handle_leader(self, leader_id):
+    #     self.current_leader = leader_id
         #print(f"Node {self.node_id} recognizes Node {self.current_leader} as the leader.")
 
     def handle_accept(self, ballot, node_id, operation_num, command): # Acceptors Reply to leader with Accepted
@@ -511,10 +506,18 @@ class Node:
             accepted_message = f"ACCEPTED {ballot} {node_id} {operation_num} {command}"
             # respond to leader with accepted message
             
-            if self.current_leader is not None:
+            if self.current_leader != 0:
                 self.send_message(("localhost", 9000 + self.current_leader), accepted_message) 
             else:
                 print("Current leader is not set. Cannot send ACCEPTED message.")
+            
+            # Case where node is behind in operation number
+            if (self.ballot_tuple[2] < operation_num): 
+                self.ballot_tuple[2] = operation_num
+                print(f"Node {self.node_id} updated operation number to {operation_num} because I was behind.")
+                message_to_central_server = "LOG " + str(self.node_id) 
+                # ask the central server for the most recent dictionary
+                self.send_to_central_server(message_to_central_server)
 
     def decide_operation(self, command, ballot, node_id, op_num): # Leader sends out DECIDE messages
         if hasattr(self, "broadcast_decide") and self.broadcast_decide:
@@ -533,20 +536,19 @@ class Node:
         self.apply_operation(command) #send to gemini
 
     def handle_decide(self, command): # Acceptors apply the operation_num locally
-        self.send_to_central_server(command) #send to gemini
+        # self.send_to_central_server(command) #send to gemini # ACCEPTOR NODES DO NOT SEND TO CENTRAL SERVER
         self.apply_operation(command) #send to gemini
 
     def apply_operation(self, command):
         self.reset_broadcast_decide()
         if command.startswith("create"):
             self.contexts[int(command.split()[1])] = "" # create context
-            print(f"Node {self.node_id} created a context ID:", self.contexts)
+            # print(f"Node {self.node_id} created a context ID:", self.contexts)
 
         elif command.startswith("query"):
             # -----------------------Gemini-------------------------------
             genai.configure(api_key="AIzaSyC64zw3CDFPuK1IJsyB_PyGA355XnmT2zw")
             model = genai.GenerativeModel("gemini-1.5-flash")
-  
             # -----------------------Gemini---------------------------------
 
             command_list = command.split() # query context_id query_string --> Query the LLM on a context ID with a query string
@@ -573,55 +575,58 @@ class Node:
                 # response_text = "Answer: " + response.text
                 # print(response_text)
 
-                # MAYBE HERE WE CAN ASK FOR USER INPUT TO PICK THE FINAL ANSWER INSTEAD OF IT ALWAYS BEING THE LEADER'S ANSWER --------------------------
+                # Every node will send their gemini response to leader
+                # Leader will then decide which response to choose
+                if self.node_id != self.current_leader:
+                    send_response_to_leader = "Candidate: " + response.text.strip() + " " + str(context_id) + " " + str(self.node_id) # Answer: California 0 3 (context Id = 0 from node 3)
+                    self.send_message(("localhost", 9000 + self.current_leader), send_response_to_leader)
+                else: # I am the leader
+                    # add my response to candidate_answers dictionary
+                    self.candidate_answers[self.node_id] = response.text.strip() + " " + str(context_id) # 3: "California 0"
+                    # print("self.candidate_answers is:", self.candidate_answers)
 
-                if self.node_id == self.current_leader: # leader's answer will always be the final answer
-                    self.contexts[context_id] = self.contexts[context_id] + " " + "Answer: " + response.text.strip() + " "
-                    print(f"Node {self.node_id} queried context:", self.contexts)
+        elif command.startswith("choose"): # choose <context_ID> <node_ID>
 
-                    time.sleep(3)
-                    print("Reaching consensus on the final answer")
-                    answer_with_context_id_command = "Answer: " + response.text.strip() + " " + str(context_id)
+            if self.node_id == self.current_leader:
+                # Only the leader does this
 
-                    self.replicate_operation(answer_with_context_id_command)
-                    
+                parts = command.split() # choose context_ID node_ID
+                context_id = int(parts[1]) # context_id = num
+                node_id = int(parts[2]) # node_id = num
 
-        elif command.startswith("Answer: "):
+                # add this to its context dictionary
+                answer = self.candidate_answers[node_id] # answer = response
+
+                # Send this update to the central server
+                agree_on_answer = "Answer: " + answer
+
+                answer_without_context_id = agree_on_answer.split()[0:-1] # answer_without_context_id = response
+                answer = " ".join(answer_without_context_id)
+                self.contexts[context_id] += " " + answer + " "
+                # print(f"Node {self.node_id} queried context:", self.contexts)
+
+                self.replicate_operation(agree_on_answer)
+
+        elif command.startswith("Answer: "): # Answer: response context_id
             self.ballot_tuple[2] += 1
-            
             print("Current operation number:", self.ballot_tuple[2])
-            # If we are the leader, we can skip this step because we already added the response to the context
-            # If we are NOT the leader, we need to add the response to the context
+
             if self.node_id != self.current_leader:
-                # I want to separate the string into two parts: Answer: Sunny and 75 degrees 1 where 1 is the context ID
-                command_list = command.split() # Answer: Sunny and 75 degrees 1
-                # I want response text to be "Answer: Sunny and 75 degrees"
-                response_text = " ".join(command_list[0:-1]) # response_text = "Answer: Sunny and 75 degrees"
-                # print("Command starts with Answer: --> response_text: ", response_text) # for debugging
-                # I want context_id to be 1
-                context_id = int(command_list[-1]) # context_id = 1
-                # print("Command starts with Answer: --> context_id: ", context_id) # for debugging
-
-                self.contexts[context_id] = self.contexts[context_id] + " " + response_text + " "
-            print(f"Node {self.node_id} new context dictionary:", self.contexts)
-
-        elif command.startswith("viewall"):
-            print(self.contexts)
-        
-        elif command.startswith("view "): # view <context_id>
-            context_id = int(command.split()[1])
-            print(self.contexts[context_id])
-            # print(f"Node {self.node_id} viewed context ID {context_id}: {self.contexts.get(context_id, 'Context not found')}")
+                parts = command.split()
+                context_id = int(parts[-1])
+                response = " ".join(parts[0:-1])
+                self.contexts[context_id] += " " + response + " "
         
         else:
-            print(f"Command -> {command} <- not recognized.")   
+            print(f"Command not recognized:", command)   
 
 if __name__ == "__main__":
-    import sys
     node_id = int(sys.argv[1])
-    port = 9000 + node_id
-    peers = [("localhost", 9000 + i + 1) for i in range(3) if (i+1) != node_id]
-    print(f"Node {node_id} peers: {peers}") # for debugging
+
+    if node_id != 0: # All the nodes do this but Central Server does not autofill its peers
+        port = 9000 + node_id
+        peers = [("localhost", 9000 + i + 1) for i in range(3) if (i+1) != node_id]
+        # print(f"Node {node_id} peers: {peers}") # for debugging
     
     running_flag = True
     server_running = True
@@ -629,7 +634,7 @@ if __name__ == "__main__":
     
     while running_flag:
         if node_id == 0: 
-            server = CentralServer(peers)
+            server = CentralServer()
             threading.Thread(target=server.start).start()
             
             while server_running:
@@ -649,16 +654,23 @@ if __name__ == "__main__":
                     node_running = False
                     running_flag = False
                     break
-                if node.current_leader == node_id:
-                    print("I am Leader: Replicating operation_num...")
+
+                elif command.startswith("view "):
+                    context_id = int(command.split()[1])
+                    print(node.contexts[context_id])
+                elif command.startswith("viewall"):
+                    print(node.contexts)
+
+                elif node.current_leader == node_id:
+                    # print("I am leader")
                     node.replicate_operation(command)
                     
                 elif node.current_leader: # Forward command to leader
-                    print("I am NOT Leader: Forwarding command to leader...")
+                    # print("I am not leader")
                     node.send_message(("localhost", 9000 + node.current_leader), command)
 
                 else:
-                    print("No leader. Need to start election...")
+                    print("No leader. Need to start election")
                     node.start_election(command)
     
     os._exit(0)
