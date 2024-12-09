@@ -163,7 +163,6 @@ class Node:
         self.accepted_ballot_num = 0 # Highest ballot number accepted by the acceptor
         self.accepted_val_num = 0 # previous value accepted by the acceptor
         self.count_responses = 0 # ONLY LEADER USES THIS TO DETERMINE A MAJORITY, FOR NOW, ASSUME WE NEED 2
-        self.queue = []
         self.contexts = {}
         self.promise_responses_dict = {} # Dictionary to store the promises received from the acceptors
         self.myVal = ""
@@ -215,7 +214,6 @@ class Node:
 
         if message.startswith("PREPARE"): # Acceptors handle this
             print(f"Node {self.node_id} received: {message}")
-            time.sleep(3)
             _, ballot, node_id, _ = message.split()
             ballot = int(ballot)
             node_id = int(node_id)
@@ -238,14 +236,12 @@ class Node:
 
 
         elif message.startswith("LEADER"):
-            time.sleep(1)
             _, leader_id = message.split()
             if leader_id == 0:
                 self.current_leader = 0
             else:
                 self.current_leader = int(leader_id)
                 
-            # self.handle_leader(leader_id) 
 
     
         elif message.startswith("ACCEPT "):
@@ -411,7 +407,9 @@ class Node:
     def start_election(self, command): # Leader sends out PREPARE messages
         self.myVal = command
         self.ballot_tuple[0] += 1
+
         prepare_message = f"PREPARE {self.ballot_tuple[0]} {self.ballot_tuple[1]} {self.ballot_tuple[2]}"
+
         self.broadcast(prepare_message)
 
     def handle_prepare(self, ballot, node_id): # Acceptors reply to leader with PROMISE
@@ -440,6 +438,8 @@ class Node:
 
 
     def handle_promise(self, ballot, node_id, accepted_val_num): # Leader handles all the promises
+
+
         if hasattr(self, "broadcast_promise") and self.broadcast_promise:
             return  # Exit if already broadcasted
 
@@ -490,16 +490,10 @@ class Node:
             if peer[1] != 9000 + node_id:  # Skip sending to itself
                 self.send_message(peer, accept_message)
 
-    # def handle_leader(self, leader_id):
-    #     self.current_leader = leader_id
-        #print(f"Node {self.node_id} recognizes Node {self.current_leader} as the leader.")
-
     def handle_accept(self, ballot, node_id, operation_num, command): # Acceptors Reply to leader with Accepted
         self.reset_broadcast_decide()
         self.reset_broadcast_promise()
         if ballot >= self.accepted_ballot_num:
-            self.queue.append(operation_num)
-
             self.accepted_ballot_num = ballot
             self.accepted_val_num = command
 
